@@ -7,8 +7,10 @@ import rospy
 import sensor_msgs.point_cloud2 as pc2
 import tf2_ros
 import tf2_sensor_msgs
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import PointStamped, PoseStamped
 from sensor_msgs.msg import JointState, LaserScan, PointCloud2
+from skrobot.coordinates import Coordinates
+from utils import CoordinateTransform
 
 
 class AverageQueue:
@@ -61,10 +63,10 @@ class LaserScanToPointCloud:
         self.joint_state_subscriber = rospy.Subscriber(
             "/joint_states", JointState, self.callback_joint_state
         )
-        self.center_publisher = rospy.Publisher("/magcup_center", PointStamped, queue_size=1)
+        self.pregrasp_pose_publisher = rospy.Publisher("/pregrasp_pose", PoseStamped, queue_size=1)
         self.debug_cloud_publisher = rospy.Publisher("/debug_cloud", PointCloud2, queue_size=1)
 
-        rospy.Timer(rospy.Duration(0.5), self.publish_center)
+        rospy.Timer(rospy.Duration(0.5), self.publish_pregrasp_pose)
         rospy.Timer(rospy.Duration(3.0), self.publish_debug_cloud)
 
         self.tf_buffer = tf2_ros.Buffer()
@@ -139,7 +141,7 @@ class LaserScanToPointCloud:
         pcloud_msg = pc2.create_cloud_xyz32(header, self.pcloud_processed)
         self.debug_cloud_publisher.publish(pcloud_msg)
 
-    def publish_center(self, event) -> None:
+    def publish_pregrasp_pose(self, event) -> None:
         if len(self.pcloud_msg_list) < self.n_collect:
             rospy.logwarn("Not enough pointclouds")
             return
@@ -159,13 +161,14 @@ class LaserScanToPointCloud:
         self.average_queue.enqueue(center_guess)
         center_mean = self.average_queue.get_average()
 
-        center_guess_msg = PointStamped()
-        center_guess_msg.header.frame_id = "base_footprint"
-        center_guess_msg.header.stamp = rospy.Time.now()
-        center_guess_msg.point.x = center_mean[0]
-        center_guess_msg.point.y = center_mean[1]
-        center_guess_msg.point.z = min(z_mean + 2.0 * z_std, self.pcloud_processed[:, 2].max())
-        self.center_publisher.publish(center_guess_msg)
+        co = Coordinates(np.hstack([center_mean, 0.78]))
+        co.rotate(-np.pi / 2, "z")
+        pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
+        pregrasp_pose_msg = PoseStamped()
+        pregrasp_pose_msg.header.frame_id = "base_footprint"
+        pregrasp_pose_msg.header.stamp = rospy.Time.now()
+        pregrasp_pose_msg.pose = pose
+        self.pregrasp_pose_publisher.publish(pregrasp_pose_msg)
 
 
 if __name__ == "__main__":
