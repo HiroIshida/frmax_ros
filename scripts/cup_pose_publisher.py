@@ -7,7 +7,7 @@ import rospy
 import sensor_msgs.point_cloud2 as pc2
 import tf2_ros
 import tf2_sensor_msgs
-from geometry_msgs.msg import PointStamped, PoseStamped
+from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import JointState, LaserScan, PointCloud2
 from skrobot.coordinates import Coordinates
 from utils import CoordinateTransform
@@ -63,10 +63,10 @@ class LaserScanToPointCloud:
         self.joint_state_subscriber = rospy.Subscriber(
             "/joint_states", JointState, self.callback_joint_state
         )
-        self.pregrasp_pose_publisher = rospy.Publisher("/pregrasp_pose", PoseStamped, queue_size=1)
+        self.object_pose_publisher = rospy.Publisher("/object_pose", PoseStamped, queue_size=1)
         self.debug_cloud_publisher = rospy.Publisher("/debug_cloud", PointCloud2, queue_size=1)
 
-        rospy.Timer(rospy.Duration(0.5), self.publish_pregrasp_pose)
+        rospy.Timer(rospy.Duration(0.5), self.publish_object_pose)
         rospy.Timer(rospy.Duration(3.0), self.publish_debug_cloud)
 
         self.tf_buffer = tf2_ros.Buffer()
@@ -141,7 +141,7 @@ class LaserScanToPointCloud:
         pcloud_msg = pc2.create_cloud_xyz32(header, self.pcloud_processed)
         self.debug_cloud_publisher.publish(pcloud_msg)
 
-    def publish_pregrasp_pose(self, event) -> None:
+    def publish_object_pose(self, event) -> None:
         if len(self.pcloud_msg_list) < self.n_collect:
             rospy.logwarn("Not enough pointclouds")
             return
@@ -164,11 +164,12 @@ class LaserScanToPointCloud:
         co = Coordinates(np.hstack([center_mean, 0.78]))
         co.rotate(-np.pi / 2, "z")
         pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
-        pregrasp_pose_msg = PoseStamped()
-        pregrasp_pose_msg.header.frame_id = "base_footprint"
-        pregrasp_pose_msg.header.stamp = rospy.Time.now()
-        pregrasp_pose_msg.pose = pose
-        self.pregrasp_pose_publisher.publish(pregrasp_pose_msg)
+        object_pose_msg = PoseStamped()
+        object_pose_msg.header.frame_id = "base_footprint"
+        object_pose_msg.header.stamp = rospy.Time.now()
+        object_pose_msg.pose = pose
+        self.object_pose_publisher.publish(object_pose_msg)
+        rospy.loginfo("publish object pose: {}".format(pose))
 
 
 if __name__ == "__main__":
