@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import laser_geometry.laser_geometry as lg
 import numpy as np
@@ -17,32 +17,40 @@ class AverageQueue:
     def __init__(self, max_size):
         self.max_size = max_size
         self.queue = []
-        self.sum = None
 
-    def enqueue(self, value):
-        if self.sum is None:
-            self.sum = np.zeros_like(value)
-
-        self.queue.append(value)
-        self.sum += value
-
+    def enqueue(self, value_with_stamp: Tuple[np.ndarray, rospy.Time]):
+        value, stamp = value_with_stamp
+        assert np.all(np.isfinite(value))
+        self.queue.append(value_with_stamp)
         if len(self.queue) > self.max_size:
-            self.sum -= self.queue.pop(0)
+            self.queue.pop(0)
 
-    def get_average(self):
+    @property
+    def values(self) -> List[np.ndarray]:
+        return [vws[0] for vws in self.queue]
+
+    def get_average(self) -> np.ndarray:
         if not self.queue:
             return None
-        return self.sum / len(self.queue)
+        return np.mean(self.values, axis=0)
 
     def get_std(self) -> np.ndarray:
         if not self.queue:
             return None
-        return np.std(self.queue, axis=0)
+        return np.std(self.values, axis=0)
+
+    def is_valid(self) -> bool:
+        t_oldest = self.queue[0][1].to_sec()
+        t_latest = self.queue[-1][1].to_sec()
+        duration = t_latest - t_oldest
+        if duration < 3.0:
+            return True
 
     def is_steady(self) -> bool:
         if not self.queue:
             return False
         std = self.get_std()
+        print(std)
         return np.all(std < 0.005)
 
 
@@ -78,7 +86,7 @@ class LaserScanToPointCloud:
         self.debug_cloud_publisher = rospy.Publisher("/debug_cloud", PointCloud2, queue_size=1)
 
         rospy.Timer(rospy.Duration(0.5), self.publish_object_pose)
-        rospy.Timer(rospy.Duration(3.0), self.publish_debug_cloud)
+        rospy.Timer(rospy.Duration(1.0), self.publish_debug_cloud)
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
@@ -169,21 +177,22 @@ class LaserScanToPointCloud:
         pcloud_xy = pcloud[:, :2]
         center_guess = np.mean(pcloud_xy, axis=0)
 
-        self.average_queue.enqueue(center_guess)
-        if not self.average_queue.is_steady():
+        self.average_queue.enqueue((center_guess, rospy.Time.now()))
+        if self.average_queue.is_steady() and self.average_queue.is_valid():
+            center_mean = self.average_queue.get_average()
+
+            co = Coordinates(np.hstack([center_mean, 0.78]))
+            co.rotate(-np.pi / 2, "z")
+            pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
+            object_pose_msg = PoseStamped()
+            object_pose_msg.header.frame_id = "base_footprint"
+            object_pose_msg.header.stamp = rospy.Time.now()
+            object_pose_msg.pose = pose
+            self.object_pose_publisher.publish(object_pose_msg)
+            rospy.loginfo("publish object pose: {}".format(pose))
+        else:
             rospy.logwarn("Not steady")
             return
-        center_mean = self.average_queue.get_average()
-
-        co = Coordinates(np.hstack([center_mean, 0.78]))
-        co.rotate(-np.pi / 2, "z")
-        pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
-        object_pose_msg = PoseStamped()
-        object_pose_msg.header.frame_id = "base_footprint"
-        object_pose_msg.header.stamp = rospy.Time.now()
-        object_pose_msg.pose = pose
-        self.object_pose_publisher.publish(object_pose_msg)
-        rospy.loginfo("publish object pose: {}".format(pose))
 
 
 if __name__ == "__main__":
