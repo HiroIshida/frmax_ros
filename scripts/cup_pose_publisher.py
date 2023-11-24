@@ -104,7 +104,7 @@ class LaserScanToPointCloud:
             if len(self.diff_history) < 10:
                 return
             mean_diff_recent = np.mean(self.diff_history[-10:])  # type: ignore
-            if mean_diff_recent > 0.005:
+            if mean_diff_recent > 0.015:
                 rospy.logerr("diff quat too large, skip")
                 return
 

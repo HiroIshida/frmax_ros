@@ -23,7 +23,7 @@ if __name__ == "__main__":
     d = 0.025
     # cmd.time     = [0.0, 0.4,  1.0, 1.1, 1.1+d,  1.2+d, 1.8+d, 2.2+d, 2.2+2*d]
 
-    dur = 2
+    dur = 1.0
     pos_start = 0.7
     pos_end = 1.4
     cmd.position = [pos_start, pos_end, pos_start]
