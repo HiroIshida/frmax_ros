@@ -1,5 +1,5 @@
 import time
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 import rospy
@@ -10,6 +10,7 @@ from sensor_msgs.msg import PointCloud2
 from skmp.constraint import CollFreeConst, PoseConstraint
 from skmp.robot.pr2 import PR2Config
 from skmp.robot.utils import get_robot_state, set_robot_state
+from skmp.satisfy import SatisfactionConfig, satisfy_by_optimization
 from skmp.solver.interface import Problem
 from skmp.solver.ompl_solver import OMPLSolver, OMPLSolverConfig
 from skrobot.coordinates import Coordinates
@@ -88,56 +89,97 @@ class Executor:
     def plannable(self) -> bool:
         return self.tf_obj_base is not None
 
-    def plan(self, hypo_error: Optional[np.ndarray] = None):
+    def plan(
+        self,
+        planer_pose_traj: List[np.ndarray],
+        hypo_error: Optional[np.ndarray] = None,
+        rot: float = -np.pi * 0.5,
+    ):
         assert self.plannable()
         assert self.tf_obj_base is not None
         if hypo_error is None:
             hypo_error = np.zeros(3)
         x_error, y_error, yaw_error = hypo_error
 
-        tf_obj_hypo = CoordinateTransform.from_skrobot_coords(
-            Coordinates([x_error, y_error, 0.0], [yaw_error, 0, 0.0]), src="object", dest="hypo"
-        )
+        def to_transform(x, y, yaw, rot) -> CoordinateTransform:
+            tf_obj_hypo = CoordinateTransform.from_skrobot_coords(
+                Coordinates([x_error, y_error, 0.0], [yaw_error, 0, 0.0]), src="object", dest="hypo"
+            )
+            tf_reach_hypo = CoordinateTransform.from_skrobot_coords(
+                Coordinates([x, y, 0.0], [yaw, 0, rot]), src="reach", dest="hypo"
+            )
+            tf_reach_obj = chain_transform(
+                tf_reach_hypo,  # reach -> hypo
+                tf_obj_hypo.inverse(),  # hypo -> object
+            )
+            tf_reach_base = chain_transform(
+                tf_reach_obj,  # reach -> object
+                self.tf_obj_base,  # object -> base
+            )
+            return tf_reach_base
 
-        tf_reach_hypo = CoordinateTransform.from_skrobot_coords(
-            Coordinates([-0.06, -0.05, 0.0], [0, 0, -np.pi * 0.5]), src="reach", dest="hypo"
-        )
+        coords_list = []
+        for relative_pose in planer_pose_traj:
+            tf_reach_base = to_transform(*relative_pose, rot)
+            co_reach = tf_reach_base.to_skrobot_coords()
+            coords_list.append(co_reach)
 
-        tf_reach_obj = chain_transform(
-            tf_reach_hypo,  # reach -> hypo
-            tf_obj_hypo.inverse(),  # hypo -> object
-        )
-        tf_reach_base = chain_transform(
-            tf_reach_obj,  # reach -> object
-            self.tf_obj_base,  # object -> base
-        )
-
-        # plan to reach
-        co_reach = tf_reach_base.to_skrobot_coords()
-
+        # setup common stuff
         pr2_plan_conf = PR2Config(control_arm="larm")
         joint_names = pr2_plan_conf._get_control_joint_names()
 
-        efkin = pr2_plan_conf.get_endeffector_kin()
-        pose_const = PoseConstraint.from_skrobot_coords([co_reach], efkin, self.pr2)
         colkin = pr2_plan_conf.get_collision_kin()
         box = Box([0.88, 1.0, 0.1], pos=[0.6, 0.0, 0.66], with_sdf=True)
         colfree_const = CollFreeConst(colkin, box.sdf, self.pr2)
 
         box_const = pr2_plan_conf.get_box_const()
         q_init = get_robot_state(self.pr2, joint_names)
-        problem = Problem(q_init, box_const, pose_const, colfree_const, None)
 
-        ompl_config = OMPLSolverConfig(n_max_call=2000, simplify=True)
-        ompl_solver = OMPLSolver.init(ompl_config)
-        ompl_solver.setup(problem)
-        res = ompl_solver.solve()
-        assert res.traj is not None
+        efkin = pr2_plan_conf.get_endeffector_kin()
+        co_reach_init = coords_list[0]
 
-        if False:
-            q_final = res.traj[-1]
-            set_robot_state(self.pr2, joint_names, q_final)
+        def whole_plan() -> Optional[List[np.ndarray]]:
+            # solve full plan to initial pose
+            pose_const = PoseConstraint.from_skrobot_coords([co_reach_init], efkin, self.pr2)
+            problem = Problem(q_init, box_const, pose_const, colfree_const, None)
+            ompl_config = OMPLSolverConfig(n_max_call=2000, simplify=True)
+            ompl_solver = OMPLSolver.init(ompl_config)
+            ompl_solver.setup(problem)
+            res = ompl_solver.solve()
+            if res.traj is None:
+                return None
 
+            # solve ik for each pose
+            q_list = list(res.traj.resample(8).numpy())
+            for co_reach in coords_list[1:]:
+                set_robot_state(self.pr2, joint_names, q_list[-1])
+                pose_const = PoseConstraint.from_skrobot_coords([co_reach], efkin, self.pr2)
+                pose_const.reflect_skrobot_model(self.pr2)
+                satis_con = SatisfactionConfig(acceptable_error=1e-5, disp=False)
+                ret = satisfy_by_optimization(
+                    pose_const, box_const, None, q_list[-1], config=satis_con
+                )
+                if not ret.success:
+                    return None
+                # check collision free after ik (dont explicitly consider in ik)
+                colfree_const.reflect_skrobot_model(self.pr2)
+                if not colfree_const.is_valid(ret.q):
+                    return None
+                q_list.append(ret.q)
+            return q_list
+
+        for _ in range(5):
+            q_list = whole_plan()
+            if q_list is None:
+                rospy.logwarn("failed to plan, retrying...")
+                continue
+            else:
+                rospy.loginfo("solved!")
+                break
+        assert q_list is not None
+
+        if True:
+            print(len(q_list))
             viewer = TrimeshSceneViewer()
             if self.debug_cloud is not None:
                 cloud = PointCloudLink(self.debug_cloud)
@@ -147,8 +189,10 @@ class Executor:
             viewer.add(box)
             viewer.add(axis)
             viewer.show()
-            import time
-
+            for q in q_list:
+                set_robot_state(self.pr2, joint_names, q)
+                viewer.redraw()
+                time.sleep(1.0)
             time.sleep(1000)
 
         # create full angle vector sequence
@@ -177,4 +221,15 @@ if __name__ == "__main__":
     while not executor.plannable():
         time.sleep(0.1)
     rospy.loginfo("Object pose is received")
-    executor.plan()
+    traj = np.array(
+        [
+            [-0.06, -0.05, 0.0],
+            [-0.05, -0.05, 0.0],
+            [-0.04, -0.05, 0.0],
+            [-0.03, -0.05, 0.0],
+            [-0.02, -0.05, 0.0],
+            [-0.01, -0.05, 0.0],
+            [-0.00, -0.05, 0.0],
+        ]
+    )
+    executor.plan(traj)
