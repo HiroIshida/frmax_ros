@@ -34,6 +34,17 @@ class AverageQueue:
             return None
         return self.sum / len(self.queue)
 
+    def get_std(self) -> np.ndarray:
+        if not self.queue:
+            return None
+        return np.std(self.queue, axis=0)
+
+    def is_steady(self) -> bool:
+        if not self.queue:
+            return False
+        std = self.get_std()
+        return np.all(std < 0.005)
+
 
 class LaserScanToPointCloud:
     pcloud_mst_list: List[PointCloud2]
@@ -159,6 +170,9 @@ class LaserScanToPointCloud:
         center_guess = np.mean(pcloud_xy, axis=0)
 
         self.average_queue.enqueue(center_guess)
+        if not self.average_queue.is_steady():
+            rospy.logwarn("Not steady")
+            return
         center_mean = self.average_queue.get_average()
 
         co = Coordinates(np.hstack([center_mean, 0.78]))
