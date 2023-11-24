@@ -29,6 +29,10 @@ class AverageQueue:
     def values(self) -> List[np.ndarray]:
         return [vws[0] for vws in self.queue]
 
+    @property
+    def stamps(self) -> List[float]:
+        return [vws[1].to_sec() for vws in self.queue]
+
     def get_average(self) -> np.ndarray:
         if not self.queue:
             return None
@@ -40,17 +44,18 @@ class AverageQueue:
         return np.std(self.values, axis=0)
 
     def is_valid(self) -> bool:
+        if len(self.queue) < self.max_size:
+            return False
         t_oldest = self.queue[0][1].to_sec()
         t_latest = self.queue[-1][1].to_sec()
         duration = t_latest - t_oldest
-        if duration < 3.0:
+        if duration < self.max_size * 1.0:
             return True
 
     def is_steady(self) -> bool:
         if not self.queue:
             return False
         std = self.get_std()
-        print(std)
         return np.all(std < 0.005)
 
 
@@ -178,10 +183,11 @@ class LaserScanToPointCloud:
         center_guess = np.mean(pcloud_xy, axis=0)
 
         self.average_queue.enqueue((center_guess, rospy.Time.now()))
+        print(self.average_queue.stamps)
         if self.average_queue.is_steady() and self.average_queue.is_valid():
             center_mean = self.average_queue.get_average()
 
-            co = Coordinates(np.hstack([center_mean, 0.78]))
+            co = Coordinates(np.hstack([center_mean, 0.80]))
             co.rotate(-np.pi / 2, "z")
             pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
             object_pose_msg = PoseStamped()
