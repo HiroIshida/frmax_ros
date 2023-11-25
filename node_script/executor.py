@@ -151,12 +151,12 @@ class Executor:
         while True:
             while not executor.plannable():
                 time.sleep(0.1)
-            y = self.execute(traj, hypo_error=hypo_error)
+            y = self.execute(planer_pose_traj, hypo_error=hypo_error)
             self.reset()
             if y is not None:
                 return y
             rospy.logwarn("plan failed. Please put obejct in different pose")
-            rospy.logwarn("error: {}".format(error))
+            rospy.logwarn("error: {}".format(hypo_error))
             while True:
                 user_input = input("push y to retry")
                 if user_input.lower() == "y":
@@ -187,6 +187,7 @@ class Executor:
                 tf_reach_hypo,  # reach -> hypo
                 tf_obj_hypo.inverse(),  # hypo -> object
             )
+            assert self.tf_obj_base is not None
             tf_reach_base = chain_transform(
                 tf_reach_obj,  # reach -> object
                 self.tf_obj_base,  # object -> base
@@ -195,7 +196,7 @@ class Executor:
 
         coords_list = []
         for relative_pose in planer_pose_traj:
-            tf_reach_base = to_transform(*relative_pose, rot)
+            tf_reach_base = to_transform(*relative_pose, rot)  # type: ignore
             co_reach = tf_reach_base.to_skrobot_coords()
             coords_list.append(co_reach)
 
@@ -237,7 +238,7 @@ class Executor:
                 set_robot_state(self.pr2, joint_names, q_list[-1])
                 pose_const = PoseConstraint.from_skrobot_coords([co_reach], efkin, self.pr2)
                 pose_const.reflect_skrobot_model(self.pr2)
-                satis_con = SatisfactionConfig(acceptable_error=1e-5, disp=False)
+                satis_con = SatisfactionConfig(acceptable_error=1e-5, disp=False, n_max_eval=50)
                 ret = satisfy_by_optimization(
                     pose_const, box_const, None, q_list[-1], config=satis_con
                 )
@@ -250,7 +251,8 @@ class Executor:
                 q_list.append(ret.q)
             return q_list
 
-        for _ in range(10):
+        q_list = None
+        for _ in range(5):
             q_list = whole_plan()
             if q_list is None:
                 rospy.logwarn("failed to plan, retrying...")
@@ -298,12 +300,13 @@ class Executor:
             label = self.wait_for_label()
             self.ri.move_gripper("larm", 0.05)
             rospy.loginfo("play back")
-            self.ri.angle_vector_sequence(avs[::-1], times=[0.5] * len(avs), time_scale=1.0)
+            self.ri.angle_vector_sequence(avs[::-1], times=[0.2] * len(avs), time_scale=1.0)
             self.ri.wait_interpolation()
+            self.pr2.angle_vector(self.ri.potentio_vector())
             return label
 
 
-def create_trajectory(param: np.ndarray, dt: float = 0.1) -> List[np.ndarray]:
+def create_trajectory(param: np.ndarray, dt: float = 0.1) -> np.ndarray:
     assert param.shape == (3 * 6 + 3,)
     n_split = 100
     start = np.array([-0.06, -0.045, 0.0])
