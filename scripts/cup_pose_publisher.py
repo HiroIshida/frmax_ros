@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-from typing import List, Optional, Tuple, Union
+
+from typing import List, Optional, Tuple
 
 import laser_geometry.laser_geometry as lg
 import numpy as np
@@ -8,7 +9,8 @@ import sensor_msgs.point_cloud2 as pc2
 import tf2_ros
 import tf2_sensor_msgs
 from geometry_msgs.msg import PoseStamped
-from sensor_msgs.msg import JointState, LaserScan, PointCloud2
+from sensor_msgs.msg import LaserScan, PointCloud2
+from sklearn.decomposition import PCA
 from skrobot.coordinates import Coordinates
 from utils import CoordinateTransform
 
@@ -24,6 +26,14 @@ class AverageQueue:
         self.queue.append(value_with_stamp)
         if len(self.queue) > self.max_size:
             self.queue.pop(0)
+
+    def observation_time_center(self) -> float:
+        if len(self.queue) < 0:
+            return np.inf
+        t_oldest = self.queue[0][1].to_sec()
+        t_latest = self.queue[-1][1].to_sec()
+        duration = t_latest - t_oldest
+        return duration / len(self.queue)
 
     @property
     def values(self) -> List[np.ndarray]:
@@ -52,41 +62,33 @@ class AverageQueue:
         if duration < self.max_size * 1.0:
             return True
 
-    def is_steady(self) -> bool:
+    def is_steady(self, threashold: float = 0.005) -> bool:
         if not self.queue:
             return False
         std = self.get_std()
-        return np.all(std < 0.005)
+        return np.all(std < threashold)
 
 
 class LaserScanToPointCloud:
     pcloud_mst_list: List[PointCloud2]
-    joint_state: Optional[JointState]
     n_collect: int
     transform_pre: Optional[tf2_ros.TransformStamped]
     quat_history: List[np.ndarray]
     diff_history: List[float]
     pcloud_processed: Optional[np.ndarray]
-    average_queue: AverageQueue
+    center_average_queue: AverageQueue
+    yaw_average_queue: AverageQueue
 
-    def __init__(self, n_collect: int = 100, use_scan: bool = False, use_cloud: bool = False):
-        assert (use_scan or use_cloud) and (not use_scan or not use_cloud)
+    def __init__(self, n_collect: int = 100):
         self.pcloud_msg_list = []
-        self.joint_state = None
         self.n_collect = n_collect
 
-        if use_scan:
-            self.laser_subscriber = rospy.Subscriber(
-                "/tilt_scan", LaserScan, self.callback_scan_or_cloud
-            )
-        else:
-            self.laser_subscriber = rospy.Subscriber(
-                "/tilt_scan_shadow_filtered", PointCloud2, self.callback_scan_or_cloud
-            )
+        self.laser_subscriber = rospy.Subscriber("/tilt_scan", LaserScan, self.callback_scan)
 
-        self.joint_state_subscriber = rospy.Subscriber(
-            "/joint_states", JointState, self.callback_joint_state
+        self.cloud_subscriber = rospy.Subscriber(
+            "/perception/hsi_filter/output", PointCloud2, self.callback_cloud
         )
+
         self.object_pose_publisher = rospy.Publisher("/object_pose", PoseStamped, queue_size=1)
         self.debug_cloud_publisher = rospy.Publisher("/debug_cloud", PointCloud2, queue_size=1)
 
@@ -99,9 +101,10 @@ class LaserScanToPointCloud:
         self.quat_history = []
         self.diff_history = []
         self.pcloud_processed = None
-        self.average_queue = AverageQueue(5)
+        self.center_average_queue = AverageQueue(5)
+        self.yaw_average_queue = AverageQueue(5)
 
-    def callback_scan_or_cloud(self, msg: Union[PointCloud2, LaserScan]):
+    def callback_scan(self, msg: LaserScan):
         try:
             transform = self.tf_buffer.lookup_transform(
                 "base_footprint", msg.header.frame_id, rospy.Time(0), rospy.Duration(0.01)
@@ -136,8 +139,21 @@ class LaserScanToPointCloud:
         ) as e:
             rospy.logwarn("TF Error: %s" % str(e))
 
-    def callback_joint_state(self, joint_state_msg):
-        self.joint_state = joint_state_msg
+    def callback_cloud(self, msg: PointCloud2):
+        assert msg.header.frame_id == "base_footprint"
+        gen = pc2.read_points(msg, skip_nans=True, field_names=("x", "y", "z"))
+        points = np.array(list(gen))
+        points_xy = points[:, :2]
+        if points_xy.shape[0] < 20:
+            rospy.logwarn("too few points")
+            return
+        pca = PCA(n_components=1)
+        pca.fit(points_xy)
+        direction_vector = pca.components_[0]
+        if direction_vector[0] < 0:
+            direction_vector = -direction_vector
+        yaw_angle = np.arctan2(direction_vector[1], direction_vector[0])
+        self.yaw_average_queue.enqueue((yaw_angle, msg.header.stamp))
 
     def _cache_filtered_pointcloud(self):
         points_list = []
@@ -182,26 +198,28 @@ class LaserScanToPointCloud:
         pcloud_xy = pcloud[:, :2]
         center_guess = np.mean(pcloud_xy, axis=0)
 
-        self.average_queue.enqueue((center_guess, rospy.Time.now()))
-        print(self.average_queue.stamps)
-        if self.average_queue.is_steady() and self.average_queue.is_valid():
-            center_mean = self.average_queue.get_average()
+        self.center_average_queue.enqueue((center_guess, rospy.Time.now()))
+        print(self.center_average_queue.stamps)
+        if self.center_average_queue.is_steady() and self.center_average_queue.is_valid():
+            if self.yaw_average_queue.is_steady(0.01) and self.yaw_average_queue.is_valid():
+                center_mean = self.center_average_queue.get_average()
 
-            co = Coordinates(np.hstack([center_mean, 0.80]))
-            co.rotate(-np.pi / 2, "z")
-            pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
-            object_pose_msg = PoseStamped()
-            object_pose_msg.header.frame_id = "base_footprint"
-            object_pose_msg.header.stamp = rospy.Time.now()
-            object_pose_msg.pose = pose
-            self.object_pose_publisher.publish(object_pose_msg)
-            rospy.loginfo("publish object pose: {}".format(pose))
-        else:
-            rospy.logwarn("Not steady")
-            return
+                co = Coordinates(np.hstack([center_mean, 0.80]))
+                yaw_mean = self.yaw_average_queue.get_average()
+                co.rotate(yaw_mean - np.pi * 0.5, "z")
+                pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
+                object_pose_msg = PoseStamped()
+                object_pose_msg.header.frame_id = "base_footprint"
+                object_pose_msg.header.stamp = rospy.Time.now()
+                object_pose_msg.pose = pose
+                self.object_pose_publisher.publish(object_pose_msg)
+                rospy.loginfo("publish object pose: {}".format(pose))
+                return
+        rospy.logwarn("Not steady")
+        return
 
 
 if __name__ == "__main__":
     rospy.init_node("laser_scan_to_point_cloud")
-    l2pc = LaserScanToPointCloud(n_collect=200, use_scan=True, use_cloud=False)
+    l2pc = LaserScanToPointCloud(n_collect=200)
     rospy.spin()
