@@ -13,8 +13,9 @@ from skmp.solver.interface import Problem
 from skmp.solver.ompl_solver import OMPLSolver, OMPLSolverConfig
 from skrobot.coordinates import Coordinates
 from skrobot.interfaces.ros import PR2ROSRobotInterface
-from skrobot.model.primitives import Axis, Box
+from skrobot.model.primitives import Axis, Box, Cylinder
 from skrobot.models.pr2 import PR2
+from skrobot.sdf import UnionSDF
 from skrobot.viewers import TrimeshSceneViewer
 from utils import CoordinateTransform, chain_transform
 
@@ -128,8 +129,14 @@ class Executor:
         joint_names = pr2_plan_conf._get_control_joint_names()
 
         colkin = pr2_plan_conf.get_collision_kin()
-        box = Box([0.88, 1.0, 0.1], pos=[0.6, 0.0, 0.66], with_sdf=True)
-        colfree_const = CollFreeConst(colkin, box.sdf, self.pr2)
+        table = Box([0.88, 1.0, 0.1], pos=[0.6, 0.0, 0.66], with_sdf=True)
+        magcup = Cylinder(0.05, 0.12, with_sdf=True)
+        magcup.visual_mesh.visual.face_colors = [255, 0, 0, 150]  # type: ignore
+        magcup.newcoords(self.tf_obj_base.to_skrobot_coords())
+        magcup.translate([0, 0, -0.03])
+        sdf_all = UnionSDF([table.sdf, magcup.sdf])
+        colfree_const_all = CollFreeConst(colkin, sdf_all, self.pr2)
+        colfree_const_table = CollFreeConst(colkin, table.sdf, self.pr2)
 
         box_const = pr2_plan_conf.get_box_const()
         q_init = get_robot_state(self.pr2, joint_names)
@@ -140,7 +147,7 @@ class Executor:
         def whole_plan() -> Optional[List[np.ndarray]]:
             # solve full plan to initial pose
             pose_const = PoseConstraint.from_skrobot_coords([co_reach_init], efkin, self.pr2)
-            problem = Problem(q_init, box_const, pose_const, colfree_const, None)
+            problem = Problem(q_init, box_const, pose_const, colfree_const_all, None)
             ompl_config = OMPLSolverConfig(n_max_call=2000, simplify=True)
             ompl_solver = OMPLSolver.init(ompl_config)
             ompl_solver.setup(problem)
@@ -161,8 +168,8 @@ class Executor:
                 if not ret.success:
                     return None
                 # check collision free after ik (dont explicitly consider in ik)
-                colfree_const.reflect_skrobot_model(self.pr2)
-                if not colfree_const.is_valid(ret.q):
+                colfree_const_table.reflect_skrobot_model(self.pr2)
+                if not colfree_const_table.is_valid(ret.q):
                     return None
                 q_list.append(ret.q)
             return q_list
@@ -184,7 +191,8 @@ class Executor:
             viewer = TrimeshSceneViewer()
             axis = Axis.from_coords(co_reach)
             viewer.add(self.pr2)
-            viewer.add(box)
+            viewer.add(table)
+            viewer.add(magcup)
             viewer.add(axis)
             viewer.show()
             for q in q_list:
