@@ -178,7 +178,7 @@ class Executor:
                 break
         assert q_list is not None
 
-        if True:
+        if False:
             print(len(q_list))
             viewer = TrimeshSceneViewer()
             if self.debug_cloud is not None:
@@ -197,17 +197,13 @@ class Executor:
 
         # create full angle vector sequence
         avs = []
-        for q in res.traj.resample(8):
-            print(q)
+        for q in q_list:
             set_robot_state(self.pr2, joint_names, q)
             avs.append(self.pr2.angle_vector())
 
-        times = [0.3 for _ in range(6)] + [0.6 for _ in range(2)]
+        times = [0.3 for _ in range(6)] + [0.6 for _ in range(2)] + [0.5 for _ in range(len(planer_pose_traj) - 1)]
+        assert len(times) == len(avs)
         self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
-        self.ri.wait_interpolation()
-
-        self.pr2.larm.move_end_pos([0.08, 0.0, 0.0])
-        self.ri.angle_vector(self.pr2.angle_vector(), time_scale=5.0, time=3.0)
         self.ri.wait_interpolation()
         self.ri.move_gripper("larm", 0.0)
 
@@ -223,13 +219,13 @@ if __name__ == "__main__":
     rospy.loginfo("Object pose is received")
     traj = np.array(
         [
-            [-0.06, -0.05, 0.0],
-            [-0.05, -0.05, 0.0],
-            [-0.04, -0.05, 0.0],
-            [-0.03, -0.05, 0.0],
-            [-0.02, -0.05, 0.0],
-            [-0.01, -0.05, 0.0],
-            [-0.00, -0.05, 0.0],
+            [-0.06, -0.045, 0.0],
+            [-0.05, -0.045, 0.0],
+            [-0.04, -0.045, 0.0],
+            [-0.03, -0.045, 0.0],
+            [-0.02, -0.045, 0.0],
+            [-0.01, -0.045, 0.0],
+            [-0.00, -0.045, 0.0],
         ]
     )
     executor.plan(traj)

@@ -154,6 +154,7 @@ class LaserScanToPointCloud:
             direction_vector = -direction_vector
         yaw_angle = np.arctan2(direction_vector[1], direction_vector[0])
         self.yaw_average_queue.enqueue((yaw_angle, msg.header.stamp))
+        rospy.loginfo("yaw: {}".format(yaw_angle))
 
     def _cache_filtered_pointcloud(self):
         points_list = []
@@ -200,23 +201,32 @@ class LaserScanToPointCloud:
 
         self.center_average_queue.enqueue((center_guess, rospy.Time.now()))
         print(self.center_average_queue.stamps)
-        if self.center_average_queue.is_steady() and self.center_average_queue.is_valid():
-            if self.yaw_average_queue.is_steady(0.01) and self.yaw_average_queue.is_valid():
-                center_mean = self.center_average_queue.get_average()
 
-                co = Coordinates(np.hstack([center_mean, 0.80]))
-                yaw_mean = self.yaw_average_queue.get_average()
-                co.rotate(yaw_mean - np.pi * 0.5, "z")
-                pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
-                object_pose_msg = PoseStamped()
-                object_pose_msg.header.frame_id = "base_footprint"
-                object_pose_msg.header.stamp = rospy.Time.now()
-                object_pose_msg.pose = pose
-                self.object_pose_publisher.publish(object_pose_msg)
-                rospy.loginfo("publish object pose: {}".format(pose))
-                return
-        rospy.logwarn("Not steady")
-        return
+        bad_situation_list = []
+        if not self.center_average_queue.is_steady():
+            bad_situation_list.append("center not steady")
+        if not self.center_average_queue.is_valid():
+            bad_situation_list.append("center not valid")
+        if not self.yaw_average_queue.is_steady(0.01):
+            yaw_std = self.yaw_average_queue.get_std()
+            bad_situation_list.append("yaw not steady: {}".format(yaw_std))
+        if not self.yaw_average_queue.is_valid():
+            bad_situation_list.append("yaw not valid")
+        if len(bad_situation_list) > 0:
+            rospy.logwarn("Bad situation: {}".format(", ".join(bad_situation_list)))
+            return
+        
+        center_mean = self.center_average_queue.get_average()
+        co = Coordinates(np.hstack([center_mean, 0.80]))
+        yaw_mean = self.yaw_average_queue.get_average()
+        co.rotate(yaw_mean - np.pi * 0.5, "z")
+        pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
+        object_pose_msg = PoseStamped()
+        object_pose_msg.header.frame_id = "base_footprint"
+        object_pose_msg.header.stamp = rospy.Time.now()
+        object_pose_msg.pose = pose
+        self.object_pose_publisher.publish(object_pose_msg)
+        rospy.loginfo("publish object pose: {}".format(pose))
 
 
 if __name__ == "__main__":
