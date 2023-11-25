@@ -1,4 +1,7 @@
+import os
+import sys
 import time
+from contextlib import contextmanager
 from typing import List, Optional
 
 import numpy as np
@@ -25,6 +28,33 @@ from skrobot.models.pr2 import PR2
 from skrobot.sdf import UnionSDF
 from skrobot.viewers import TrimeshSceneViewer
 from utils import CoordinateTransform, chain_transform
+
+
+@contextmanager
+def suppress_output(stream_name):
+    if stream_name not in ["stdout", "stderr"]:
+        raise ValueError("Invalid stream name. Use 'stdout' or 'stderr'.")
+
+    # Select the appropriate stream
+    stream = sys.stdout if stream_name == "stdout" else sys.stderr
+    fd = stream.fileno()
+
+    def _redirect_stream(to):
+        stream.close()  # Close and flush the stream
+        os.dup2(to.fileno(), fd)  # Redirect fd to the 'to' file
+        if stream_name == "stdout":
+            sys.stdout = os.fdopen(fd, "w")  # Reopen stdout for Python
+        else:
+            sys.stderr = os.fdopen(fd, "w")  # Reopen stderr for Python
+
+    # Duplicate the file descriptor
+    with os.fdopen(os.dup(fd), "w") as old_stream:
+        with open(os.devnull, "w") as file:
+            _redirect_stream(to=file)
+        try:
+            yield  # Allow code to run with redirected stream
+        finally:
+            _redirect_stream(to=old_stream)  # Restore the original stream
 
 
 class RobotInterfaceWrap(PR2ROSRobotInterface):
