@@ -75,7 +75,11 @@
         use_indices: false
         keep_organized: false
         h_limit_max: 127
-        h_limit_min: 18
+        h_limit_min: 27
+        s_limit_max: 126
+        s_limit_min: 0
+        i_limit_max: 255
+        i_limit_min: 0
       </rosparam>
     </node>
     <node name="pose_detector" pkg="frmax_ros" type="cup_pose_publisher.py" output="screen"/>
