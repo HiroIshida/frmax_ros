@@ -3,10 +3,8 @@ from typing import List, Optional
 
 import numpy as np
 import rospy
-import sensor_msgs.point_cloud2 as pc2
 from geometry_msgs.msg import PoseStamped
 from rospy import Subscriber
-from sensor_msgs.msg import PointCloud2
 from skmp.constraint import CollFreeConst, PoseConstraint
 from skmp.robot.pr2 import PR2Config
 from skmp.robot.utils import get_robot_state, set_robot_state
@@ -15,7 +13,7 @@ from skmp.solver.interface import Problem
 from skmp.solver.ompl_solver import OMPLSolver, OMPLSolverConfig
 from skrobot.coordinates import Coordinates
 from skrobot.interfaces.ros import PR2ROSRobotInterface
-from skrobot.model.primitives import Axis, Box, PointCloudLink
+from skrobot.model.primitives import Axis, Box
 from skrobot.models.pr2 import PR2
 from skrobot.viewers import TrimeshSceneViewer
 from utils import CoordinateTransform, chain_transform
@@ -53,9 +51,9 @@ class Executor:
     tf_obj_base: Optional[CoordinateTransform]
     pr2: PR2
     ri: PR2ROSRobotInterface
-    debug_cloud: Optional[np.ndarray]
+    is_simulation: bool
 
-    def __init__(self):
+    def __init__(self, debug_pose_msg: Optional[PoseStamped]):
         pr2 = PR2()
         pr2.reset_manip_pose()
         self.pr2 = pr2
@@ -64,27 +62,28 @@ class Executor:
         self.pr2.r_shoulder_lift_joint.joint_angle(-0.5)
         self.pr2.l_shoulder_lift_joint.joint_angle(-0.5)
         self.pr2.l_wrist_roll_joint.joint_angle(0.0)
-        self.ri = RobotInterfaceWrap(pr2)
-        self.ri.move_gripper("larm", 0.05)
-        self.ri.angle_vector(self.pr2.angle_vector())
-        self.ri.wait_interpolation()
-        time.sleep(2.0)
 
-        self.sub = Subscriber("/object_pose", PoseStamped, self.callback)
-        self.sub_cloud = Subscriber("/debug_cloud", PointCloud2, self.callback_cloud)
-        self.tf_obj_base = None
-        self.debug_cloud = None
+        self.is_simulation = debug_pose_msg is not None
+        if self.is_simulation:
+            tf = CoordinateTransform.from_ros_pose(debug_pose_msg.pose)
+            tf.src = "object"
+            tf.dest = "base"
+            self.tf_obj_base = tf
+        else:
+            self.ri = RobotInterfaceWrap(pr2)
+            self.ri.move_gripper("larm", 0.05)
+            self.ri.angle_vector(self.pr2.angle_vector())
+            self.ri.wait_interpolation()
+            time.sleep(2.0)
+
+            self.sub = Subscriber("/object_pose", PoseStamped, self.callback)
+            self.tf_obj_base = None
 
     def callback(self, msg: PoseStamped):
         tf = CoordinateTransform.from_ros_pose(msg.pose)
         tf.src = "object"
         tf.dest = "base"
         self.tf_obj_base = tf
-
-    def callback_cloud(self, msg: PointCloud2):
-        gen = pc2.read_points(msg, skip_nans=True, field_names=("x", "y", "z"))
-        points = np.array(list(gen))
-        self.debug_cloud = points
 
     def plannable(self) -> bool:
         return self.tf_obj_base is not None
@@ -180,12 +179,9 @@ class Executor:
             rospy.logwarn("failed to plan")
             return None
 
-        if False:
+        if True:
             print(len(q_list))
             viewer = TrimeshSceneViewer()
-            if self.debug_cloud is not None:
-                cloud = PointCloudLink(self.debug_cloud)
-                viewer.add(cloud)
             axis = Axis.from_coords(co_reach)
             viewer.add(self.pr2)
             viewer.add(box)
@@ -197,41 +193,49 @@ class Executor:
                 time.sleep(1.0)
             time.sleep(1000)
 
-        # create full angle vector sequence
-        avs = []
-        for q in q_list:
-            set_robot_state(self.pr2, joint_names, q)
-            avs.append(self.pr2.angle_vector())
+        if not self.is_simulation:
+            # create full angle vector sequence
+            avs = []
+            for q in q_list:
+                set_robot_state(self.pr2, joint_names, q)
+                avs.append(self.pr2.angle_vector())
 
-        times = (
-            [0.3 for _ in range(6)]
-            + [0.6 for _ in range(2)]
-            + [0.5 for _ in range(len(planer_pose_traj) - 1)]
-        )
-        assert len(times) == len(avs)
-        self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
-        self.ri.wait_interpolation()
-        self.ri.move_gripper("larm", 0.0)
+            times = (
+                [0.3 for _ in range(6)]
+                + [0.6 for _ in range(2)]
+                + [0.5 for _ in range(len(planer_pose_traj) - 1)]
+            )
+            assert len(times) == len(avs)
+            self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
+            self.ri.wait_interpolation()
+            self.ri.move_gripper("larm", 0.0)
 
-        def wait_for_label() -> bool:
-            while True:
-                user_input = input("Add label: Enter 'y' for True or 'n' for False: ")
-                if user_input.lower() == "y":
-                    return True
-                elif user_input.lower() == "n":
-                    return False
+            def wait_for_label() -> bool:
+                while True:
+                    user_input = input("Add label: Enter 'y' for True or 'n' for False: ")
+                    if user_input.lower() == "y":
+                        return True
+                    elif user_input.lower() == "n":
+                        return False
 
-        label = wait_for_label()
-        self.ri.move_gripper("larm", 0.05)
-        self.ri.angle_vector_sequence(avs[::-1], times=[0.3] * len(avs), time_scale=1.0)
-        self.ri.wait_interpolation()
-        return label
+            label = wait_for_label()
+            self.ri.move_gripper("larm", 0.05)
+            self.ri.angle_vector_sequence(avs[::-1], times=[0.3] * len(avs), time_scale=1.0)
+            self.ri.wait_interpolation()
+            return label
 
 
 if __name__ == "__main__":
-    rospy.init_node("executor")
+    debug_pose_msg = PoseStamped()
+    debug_pose_msg.pose.position.x = 0.47641722876585824
+    debug_pose_msg.pose.position.y = -0.054688228244401484
+    debug_pose_msg.pose.position.z = 0.8
+    debug_pose_msg.pose.orientation.x = 0.0
+    debug_pose_msg.pose.orientation.y = 0.0
+    debug_pose_msg.pose.orientation.z = -0.6325926153678488
+    debug_pose_msg.pose.orientation.w = 0.7744847209481055
 
-    executor = Executor()
+    executor = Executor(debug_pose_msg)
 
     # wait until the object pose is received
     while not executor.plannable():
