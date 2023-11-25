@@ -126,7 +126,44 @@ class Executor:
     def plannable(self) -> bool:
         return self.tf_obj_base is not None
 
-    def plan(
+    def reset(self) -> None:
+        if self.is_simulation:
+            return
+        self.tf_obj_base = None
+
+    @staticmethod
+    def wait_for_label() -> Optional[bool]:
+        while True:
+            user_input = input("Add label: Enter 'y' for True or 'n' for False, r for retry")
+            if user_input.lower() == "y":
+                return True
+            elif user_input.lower() == "n":
+                return False
+            elif user_input.lower() == "r":
+                return None
+
+    def robust_execute(
+        self,
+        planer_pose_traj: List[np.ndarray],
+        hypo_error: Optional[np.ndarray] = None,
+        rot: float = -np.pi * 0.5,
+    ) -> bool:
+        while True:
+            while not executor.plannable():
+                time.sleep(0.1)
+            y = self.execute(traj, hypo_error=hypo_error)
+            self.reset()
+            if y is not None:
+                return y
+            rospy.logwarn("plan failed. Please put obejct in different pose")
+            rospy.logwarn("error: {}".format(error))
+            while True:
+                user_input = input("push y to retry")
+                if user_input.lower() == "y":
+                    break
+        assert False
+
+    def execute(
         self,
         planer_pose_traj: List[np.ndarray],
         hypo_error: Optional[np.ndarray] = None,
@@ -134,6 +171,7 @@ class Executor:
     ) -> Optional[bool]:
         assert self.plannable()
         assert self.tf_obj_base is not None
+        rospy.loginfo("tf_obj_base: {}".format(self.tf_obj_base))
         if hypo_error is None:
             hypo_error = np.zeros(3)
         x_error, y_error, yaw_error = hypo_error
@@ -186,10 +224,11 @@ class Executor:
             pose_const = PoseConstraint.from_skrobot_coords([co_reach_init], efkin, self.pr2)
             problem = Problem(q_init, box_const, pose_const, colfree_const_all, None)
             ompl_config = OMPLSolverConfig(n_max_call=2000, simplify=True)
-            ompl_solver = OMPLSolver.init(ompl_config)
+            ompl_solver = OMPLSolver.init(ompl_config).as_parallel_solver()
             ompl_solver.setup(problem)
             res = ompl_solver.solve()
             if res.traj is None:
+                rospy.logwarn("failed to plan to initial pose")
                 return None
 
             # solve ik for each pose
@@ -223,7 +262,7 @@ class Executor:
             rospy.logwarn("failed to plan")
             return None
 
-        if True:
+        if False:
             viewer = TrimeshSceneViewer()
             axis = Axis.from_coords(co_reach)
             viewer.add(self.pr2)
@@ -237,7 +276,10 @@ class Executor:
                 time.sleep(1.0)
             time.sleep(1000)
 
-        if not self.is_simulation:
+        if self.is_simulation:
+            label = self.wait_for_label()
+            return label
+        else:
             # create full angle vector sequence
             avs = []
             for q in q_list:
@@ -253,18 +295,10 @@ class Executor:
             self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
             self.ri.wait_interpolation()
             self.ri.move_gripper("larm", 0.0)
-
-            def wait_for_label() -> bool:
-                while True:
-                    user_input = input("Add label: Enter 'y' for True or 'n' for False: ")
-                    if user_input.lower() == "y":
-                        return True
-                    elif user_input.lower() == "n":
-                        return False
-
-            label = wait_for_label()
+            label = self.wait_for_label()
             self.ri.move_gripper("larm", 0.05)
-            self.ri.angle_vector_sequence(avs[::-1], times=[0.3] * len(avs), time_scale=1.0)
+            rospy.loginfo("play back")
+            self.ri.angle_vector_sequence(avs[::-1], times=[0.5] * len(avs), time_scale=1.0)
             self.ri.wait_interpolation()
             return label
 
@@ -307,7 +341,8 @@ if __name__ == "__main__":
     debug_pose_msg.pose.orientation.z = -0.6325926153678488
     debug_pose_msg.pose.orientation.w = 0.7744847209481055
 
-    executor = Executor(debug_pose_msg)
+    # executor = Executor(debug_pose_msg)
+    executor = Executor(None)
 
     debug: bool = False
     if debug:
@@ -315,33 +350,32 @@ if __name__ == "__main__":
         planer_traj = create_trajectory(param)
 
         # wait until the object pose is received
-        while not executor.plannable():
-            time.sleep(0.1)
         rospy.loginfo("Object pose is received")
-        executor.plan(planer_traj)
+        executor.robust_execute(planer_traj)
     else:
 
         def sample_situation() -> np.ndarray:
             x = np.random.uniform(-0.03, 0.03)
             y = np.random.uniform(-0.03, 0.03)
-            yaw = np.random.uniform(-np.pi * 0.2, np.pi * 0.2)
+            yaw = np.random.uniform(-np.pi * 0.1, np.pi * 0.1)
             return np.array([x, y, yaw])
 
         param_init = np.zeros(21)
         traj = create_trajectory(param_init)
         # create initial dataset
         n_init_sample = 10
-        X, Y = []
+        X, Y = [], []
         for _ in range(n_init_sample):
             error = sample_situation()
-            is_success = executor.plan(traj, hypo_error=error)
+            is_success = executor.robust_execute(traj, hypo_error=error)
             X.append(np.hstack([param_init, error]))
             Y.append(is_success)
 
         X = np.array(X)
         Y = np.array(Y)
         ls_param = np.ones(21)
-        ls_err = np.array([0.01, 0.01, np.deg2rad(5.0)])
+        # ls_err = np.array([0.01, 0.01, np.deg2rad(5.0)])
+        ls_err = np.array([0.01, 0.01, np.deg2rad(1.0)])
         metric = CompositeMetric.from_ls_list([ls_param, ls_err])
 
         config = DGSamplerConfig(
@@ -361,8 +395,5 @@ if __name__ == "__main__":
             x = sampler.ask()
             assert x is not None
             param, error = x[:-3], x[-3:]
-            while True:
-                y = executor.plan(traj, hypo_error=error)
-                if y is not None:
-                    break
+            y = executor.robust_execute(traj, hypo_error=error)
             sampler.tell(x, y)
