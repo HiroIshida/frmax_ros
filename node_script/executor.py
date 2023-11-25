@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 import time
@@ -213,12 +214,33 @@ class Executor:
         sdf_all = UnionSDF([table.sdf, magcup.sdf])
         colfree_const_all = CollFreeConst(colkin, sdf_all, self.pr2)
         colfree_const_table = CollFreeConst(colkin, table.sdf, self.pr2)
+        colfree_const_magcup = CollFreeConst(colkin, magcup.sdf, self.pr2)
 
         box_const = pr2_plan_conf.get_box_const()
         q_init = get_robot_state(self.pr2, joint_names)
 
         efkin = pr2_plan_conf.get_endeffector_kin()
         co_reach_init = coords_list[0]
+
+        # check if initial pose is collision free
+        # NOTE: solve unconstrained IK first. which should be solved...
+        # if this cannot be true, then the whole plan is not feasible
+        # thus return None. If solved successfully, then check collision
+        # and if not collision free, meaning that any configuration
+        # satisfying the constraint is not collision free, then return False
+        satis_con = SatisfactionConfig(acceptable_error=1e-5, disp=False, n_max_eval=50)
+        pose_const = PoseConstraint.from_skrobot_coords([co_reach_init], efkin, self.pr2)
+        box_const_dummy = copy.deepcopy(box_const)
+        box_const_dummy.lb -= 3.0
+        box_const_dummy.ub += 3.0
+        ret = satisfy_by_optimization(pose_const, box_const, None, q_init, config=satis_con)
+        if not ret.success:
+            rospy.logwarn("failed to plan to initial pose without collision constraint")
+            return None
+        is_collide = not colfree_const_magcup.is_valid(ret.q)
+        if is_collide:
+            rospy.loginfo("initial pose is not collision free. consider it as failure")
+            return False
 
         def whole_plan() -> Optional[List[np.ndarray]]:
             # solve full plan to initial pose
