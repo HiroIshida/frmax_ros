@@ -74,10 +74,21 @@ class LaserScanToPointCloud:
         self.cloud_subscriber = rospy.Subscriber(
             "/perception/hsi_filter/output", PointCloud2, self.callback_cloud
         )
-        self.object_pose_kinect_publisher = rospy.Publisher(
-            "/object_pose", PoseStamped, queue_size=1
+        self.object_pose_publisher = rospy.Publisher("/object_pose", PoseStamped, queue_size=10)
+        self.object_pose_raw_publisher = rospy.Publisher(
+            "/object_pose_raw", PoseStamped, queue_size=10
         )
         self.pose_average_queue = AverageQueue(5)
+
+    def planer_pose_to_pose_stamped(self, planer_pose: np.ndarray) -> PoseStamped:
+        pose_stamped = PoseStamped()
+        pose_stamped.header.stamp = rospy.Time.now()
+        x_mean, y_mean, yaw_mean = planer_pose
+        co = Coordinates(np.hstack([x_mean, y_mean, self.cup_height]))
+        co.rotate(yaw_mean - np.pi * 0.5, "z")
+        pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
+        pose_stamped.pose = pose
+        return pose_stamped
 
     def callback_cloud(self, msg: PointCloud2):
         assert msg.header.frame_id == "base_footprint"
@@ -95,6 +106,10 @@ class LaserScanToPointCloud:
             direction_vector = -direction_vector
         yaw_angle = np.arctan2(direction_vector[1], direction_vector[0])
         pose = np.hstack([center, yaw_angle])
+        rospy.loginfo("pose raw: {}".format(pose))
+        pose_stamped_raw = self.planer_pose_to_pose_stamped(pose)
+        pose_stamped_raw.header.frame_id = "base_footprint"
+        self.object_pose_raw_publisher.publish(pose_stamped_raw)
 
         self.pose_average_queue.enqueue((pose, msg.header.stamp))
 
@@ -105,15 +120,9 @@ class LaserScanToPointCloud:
         if len(bad_status_list) > 0:
             rospy.logwarn("Bad status: {}".format(", ".join(bad_status_list)))
             return
-        pose_stamped = PoseStamped()
-        pose_stamped.header = msg.header
-        pose_stamped.header.stamp = rospy.Time.now()
-        x_mean, y_mean, yaw_mean = self.pose_average_queue.get_average()
-        co = Coordinates(np.hstack([x_mean, y_mean, self.cup_height]))
-        co.rotate(yaw_mean - np.pi * 0.5, "z")
-        pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
-        pose_stamped.pose = pose
-        self.object_pose_kinect_publisher.publish(pose_stamped)
+        pose_stamped = self.planer_pose_to_pose_stamped(pose)
+        pose_stamped.header.frame_id = "base_footprint"
+        self.object_pose_publisher.publish(pose_stamped)
         rospy.loginfo("publish object pose kinect: {}".format(pose))
 
 
