@@ -3,7 +3,14 @@ from typing import List, Optional
 
 import numpy as np
 import rospy
+from frmax2.core import (
+    BlackBoxSampler,
+    CompositeMetric,
+    DGSamplerConfig,
+    DistributionGuidedSampler,
+)
 from geometry_msgs.msg import PoseStamped
+from movement_primitives.dmp import DMP
 from rospy import Subscriber
 from skmp.constraint import CollFreeConst, PoseConstraint
 from skmp.robot.pr2 import PR2Config
@@ -55,7 +62,7 @@ class Executor:
     is_simulation: bool
 
     def __init__(self, debug_pose_msg: Optional[PoseStamped]):
-        pr2 = PR2()
+        pr2 = PR2(use_tight_joint_limit=False)
         pr2.reset_manip_pose()
         self.pr2 = pr2
         self.pr2.r_shoulder_pan_joint.joint_angle(-2.1)
@@ -174,7 +181,7 @@ class Executor:
                 q_list.append(ret.q)
             return q_list
 
-        for _ in range(5):
+        for _ in range(10):
             q_list = whole_plan()
             if q_list is None:
                 rospy.logwarn("failed to plan, retrying...")
@@ -187,7 +194,6 @@ class Executor:
             return None
 
         if True:
-            print(len(q_list))
             viewer = TrimeshSceneViewer()
             axis = Axis.from_coords(co_reach)
             viewer.add(self.pr2)
@@ -233,6 +239,34 @@ class Executor:
             return label
 
 
+def create_trajectory(param: np.ndarray, dt: float = 0.1) -> List[np.ndarray]:
+    assert param.shape == (3 * 6 + 3,)
+    n_split = 100
+    start = np.array([-0.06, -0.045, 0.0])
+    goal = np.array([-0.0, -0.045, 0.0])
+    diff_step = (goal - start) / (n_split - 1)
+    traj_default = np.array([start + diff_step * i for i in range(n_split)])
+    n_weights_per_dim = 6
+    dmp = DMP(3, execution_time=1.0, n_weights_per_dim=n_weights_per_dim, dt=dt)
+    dmp.imitate(np.linspace(0, 1, n_split), traj_default.copy())
+    dmp.configure(start_y=traj_default[0])
+
+    # set param
+    xytheta_scaling = np.array([0.01, 0.01, np.deg2rad(20.0)])
+    goal_position_scaling = xytheta_scaling * 1.0
+
+    xytheta_scaling = np.array([0.03, 0.03, np.deg2rad(20.0)])
+    force_scalineg = xytheta_scaling * 300
+    n_dim = 3
+    n_goal_dim = 3
+    W = param[:-n_goal_dim].reshape(n_dim, -1)
+    dmp.forcing_term.weights_[:, :] += W[:, :] * force_scalineg[:, None]
+    goal_param = param[-n_goal_dim:] * goal_position_scaling
+    dmp.goal_y += goal_param
+    _, planer_traj = dmp.open_loop()
+    return planer_traj
+
+
 if __name__ == "__main__":
     debug_pose_msg = PoseStamped()
     debug_pose_msg.pose.position.x = 0.47641722876585824
@@ -245,19 +279,60 @@ if __name__ == "__main__":
 
     executor = Executor(debug_pose_msg)
 
-    # wait until the object pose is received
-    while not executor.plannable():
-        time.sleep(0.1)
-    rospy.loginfo("Object pose is received")
-    traj = np.array(
-        [
-            [-0.06, -0.045, 0.0],
-            [-0.05, -0.045, 0.0],
-            [-0.04, -0.045, 0.0],
-            [-0.03, -0.045, 0.0],
-            [-0.02, -0.045, 0.0],
-            [-0.01, -0.045, 0.0],
-            [-0.00, -0.045, 0.0],
-        ]
-    )
-    executor.plan(traj)
+    debug: bool = False
+    if debug:
+        param = np.random.randn(21) * 0.0
+        planer_traj = create_trajectory(param)
+
+        # wait until the object pose is received
+        while not executor.plannable():
+            time.sleep(0.1)
+        rospy.loginfo("Object pose is received")
+        executor.plan(planer_traj)
+    else:
+
+        def sample_situation() -> np.ndarray:
+            x = np.random.uniform(-0.03, 0.03)
+            y = np.random.uniform(-0.03, 0.03)
+            yaw = np.random.uniform(-np.pi * 0.2, np.pi * 0.2)
+            return np.array([x, y, yaw])
+
+        param_init = np.zeros(21)
+        traj = create_trajectory(param_init)
+        # create initial dataset
+        n_init_sample = 10
+        X, Y = []
+        for _ in range(n_init_sample):
+            error = sample_situation()
+            is_success = executor.plan(traj, hypo_error=error)
+            X.append(np.hstack([param_init, error]))
+            Y.append(is_success)
+
+        X = np.array(X)
+        Y = np.array(Y)
+        ls_param = np.ones(21)
+        ls_err = np.array([0.01, 0.01, np.deg2rad(5.0)])
+        metric = CompositeMetric.from_ls_list([ls_param, ls_err])
+
+        config = DGSamplerConfig(
+            param_ls_reduction_rate=0.999,
+            n_mc_param_search=30,
+            c_svm=10000,
+            integration_method="mc",
+            n_mc_integral=1000,
+            r_exploration=0.5,
+            learning_rate=1.0,
+        )
+        sampler: BlackBoxSampler = DistributionGuidedSampler(
+            X, Y, metric, param_init, config, situation_sampler=sample_situation
+        )
+        for _ in range(1000):
+            sampler.update_center()
+            x = sampler.ask()
+            assert x is not None
+            param, error = x[:-3], x[-3:]
+            while True:
+                y = executor.plan(traj, hypo_error=error)
+                if y is not None:
+                    break
+            sampler.tell(x, y)
