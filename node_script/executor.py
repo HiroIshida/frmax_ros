@@ -94,7 +94,7 @@ class Executor:
         planer_pose_traj: List[np.ndarray],
         hypo_error: Optional[np.ndarray] = None,
         rot: float = -np.pi * 0.5,
-    ):
+    ) -> Optional[bool]:
         assert self.plannable()
         assert self.tf_obj_base is not None
         if hypo_error is None:
@@ -176,7 +176,9 @@ class Executor:
             else:
                 rospy.loginfo("solved!")
                 break
-        assert q_list is not None
+        if q_list is None:
+            rospy.logwarn("failed to plan")
+            return None
 
         if False:
             print(len(q_list))
@@ -201,11 +203,29 @@ class Executor:
             set_robot_state(self.pr2, joint_names, q)
             avs.append(self.pr2.angle_vector())
 
-        times = [0.3 for _ in range(6)] + [0.6 for _ in range(2)] + [0.5 for _ in range(len(planer_pose_traj) - 1)]
+        times = (
+            [0.3 for _ in range(6)]
+            + [0.6 for _ in range(2)]
+            + [0.5 for _ in range(len(planer_pose_traj) - 1)]
+        )
         assert len(times) == len(avs)
         self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
         self.ri.wait_interpolation()
         self.ri.move_gripper("larm", 0.0)
+
+        def wait_for_label() -> bool:
+            while True:
+                user_input = input("Add label: Enter 'y' for True or 'n' for False: ")
+                if user_input.lower() == "y":
+                    return True
+                elif user_input.lower() == "n":
+                    return False
+
+        label = wait_for_label()
+        self.ri.move_gripper("larm", 0.05)
+        self.ri.angle_vector_sequence(avs[::-1], times=[0.3] * len(avs), time_scale=1.0)
+        self.ri.wait_interpolation()
+        return label
 
 
 if __name__ == "__main__":
