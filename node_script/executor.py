@@ -395,10 +395,9 @@ class Executor:
             # check if actually played back
             q_now = get_robot_state(self.pr2, joint_names)
             diff = q_now - self.q_home
-            if np.any(diff > 0.1):
+            if np.any(diff > 0.2):  # TODO: remove ?
                 rospy.logwarn("failed to play back. plan again...")
-                q_home = get_robot_state(self.pr2, joint_names)
-                configuration_const = ConfigPointConst(q_home)
+                configuration_const = ConfigPointConst(self.q_home)
                 problem = Problem(q_now, box_const, configuration_const, colfree_const_table, None)
                 ompl_config = OMPLSolverConfig(n_max_call=2000, simplify=True)
                 ompl_solver = OMPLSolver.init(ompl_config).as_parallel_solver()
