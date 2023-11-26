@@ -237,21 +237,22 @@ class Executor:
             co_reach = tf_reach_base.to_skrobot_coords()
             coords_list.append(co_reach)
 
-        debug_path = RosPath()
-        common_header = Header()
-        common_header.stamp = rospy.Time.now()
-        common_header.frame_id = "base_footprint"
-        for co in coords_list:
-            pose_msg = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
-            pose_stamped_msg = PoseStamped(pose=pose_msg)
-            pose_stamped_msg.header = common_header
-        pose_msg_list = [
-            CoordinateTransform.from_skrobot_coords(co).to_ros_pose() for co in coords_list
-        ]
-        pose_stamped_msg_list = [PoseStamped(pose=msg) for msg in pose_msg_list]
-        debug_path.header = common_header
-        debug_path.poses = pose_stamped_msg_list
-        self.pub.publish(debug_path)
+        if not self.is_simulation:
+            debug_path = RosPath()
+            common_header = Header()
+            common_header.stamp = rospy.Time.now()
+            common_header.frame_id = "base_footprint"
+            for co in coords_list:
+                pose_msg = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
+                pose_stamped_msg = PoseStamped(pose=pose_msg)
+                pose_stamped_msg.header = common_header
+            pose_msg_list = [
+                CoordinateTransform.from_skrobot_coords(co).to_ros_pose() for co in coords_list
+            ]
+            pose_stamped_msg_list = [PoseStamped(pose=msg) for msg in pose_msg_list]
+            debug_path.header = common_header
+            debug_path.poses = pose_stamped_msg_list
+            self.pub.publish(debug_path)
 
         # setup common stuff
         pr2_plan_conf = PR2Config(control_arm="larm")
