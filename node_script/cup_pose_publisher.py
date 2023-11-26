@@ -78,14 +78,14 @@ class LaserScanToPointCloud:
         self.object_pose_raw_publisher = rospy.Publisher(
             "/object_pose_raw", PoseStamped, queue_size=10
         )
-        self.pose_average_queue = AverageQueue(5)
+        self.pose_average_queue = AverageQueue(20)
 
-    def planer_pose_to_pose_stamped(self, planer_pose: np.ndarray) -> PoseStamped:
+    def xyzyaw_to_pose_stamped(self, xyzyaw: np.ndarray) -> PoseStamped:
         pose_stamped = PoseStamped()
         pose_stamped.header.stamp = rospy.Time.now()
-        x_mean, y_mean, yaw_mean = planer_pose
-        co = Coordinates(np.hstack([x_mean, y_mean, self.cup_height]))
-        co.rotate(yaw_mean - np.pi * 0.5, "z")
+        x, y, z, yaw = xyzyaw
+        co = Coordinates(np.hstack([x, y, z]))
+        co.rotate(yaw - np.pi * 0.5, "z")
         pose = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
         pose_stamped.pose = pose
         return pose_stamped
@@ -98,32 +98,33 @@ class LaserScanToPointCloud:
         if points_xy.shape[0] < 20:
             rospy.logwarn("too few points")
             return
-        center = np.mean(points_xy, axis=0)
+        center = np.mean(points, axis=0)
         pca = PCA(n_components=1)
         pca.fit(points_xy)
         direction_vector = pca.components_[0]
         if direction_vector[0] < 0:
             direction_vector = -direction_vector
         yaw_angle = np.arctan2(direction_vector[1], direction_vector[0])
-        pose = np.hstack([center, yaw_angle])
-        rospy.loginfo("pose raw: {}".format(pose))
-        pose_stamped_raw = self.planer_pose_to_pose_stamped(pose)
+        xyzyaw = np.hstack([center, yaw_angle])
+        rospy.loginfo("pose raw: {}".format(xyzyaw))
+        pose_stamped_raw = self.xyzyaw_to_pose_stamped(xyzyaw)
         pose_stamped_raw.header.frame_id = "base_footprint"
         self.object_pose_raw_publisher.publish(pose_stamped_raw)
 
-        self.pose_average_queue.enqueue((pose, msg.header.stamp))
+        self.pose_average_queue.enqueue((xyzyaw, msg.header.stamp))
 
         bad_status_list = []
         pose_std = self.pose_average_queue.get_std()
-        if pose_std[0] > 0.005 or pose_std[1] > 0.005 or pose_std[2] > 0.02:
+        rospy.loginfo("pose std: {}".format(pose_std))
+        if pose_std[0] > 0.005 or pose_std[1] > 0.005 or pose_std[2] > 0.005 or pose_std[2] > 0.02:
             bad_status_list.append("pose not steady: {}".format(pose_std))
         if len(bad_status_list) > 0:
             rospy.logwarn("Bad status: {}".format(", ".join(bad_status_list)))
             return
-        pose_stamped = self.planer_pose_to_pose_stamped(pose)
+        pose_stamped = self.xyzyaw_to_pose_stamped(xyzyaw)
         pose_stamped.header.frame_id = "base_footprint"
         self.object_pose_publisher.publish(pose_stamped)
-        rospy.loginfo("publish object pose kinect: {}".format(pose))
+        rospy.loginfo("publish object pose kinect: {}".format(xyzyaw))
 
 
 if __name__ == "__main__":
