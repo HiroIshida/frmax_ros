@@ -80,6 +80,9 @@ class RobotInterfaceWrap(PR2ROSRobotInterface):
     def angle_vector(self, av: Optional[np.ndarray] = None, **kwargs):
         if av is None:
             return super().angle_vector()
+        if np.any(np.isinf(av)) or np.any(np.isnan(av)):
+            raise ValueError("angle vector contains inf or nan")
+
         av = av.copy()
         av[self.offset_indices] += self.offset_values
         super().angle_vector(av, **kwargs)
@@ -88,6 +91,8 @@ class RobotInterfaceWrap(PR2ROSRobotInterface):
         avs = [av.copy() for av in avs]
         for av in avs:
             av[self.offset_indices] += self.offset_values
+            if np.any(np.isinf(av)) or np.any(np.isnan(av)):
+                raise ValueError("angle vector contains inf or nan")
         super().angle_vector_sequence(avs, **kwargs)
 
 
