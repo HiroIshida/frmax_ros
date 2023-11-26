@@ -5,8 +5,9 @@ import pickle
 import sys
 import time
 from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import rospy
@@ -27,7 +28,7 @@ from skmp.robot.utils import get_robot_state, set_robot_state
 from skmp.satisfy import SatisfactionConfig, satisfy_by_optimization
 from skmp.solver.interface import Problem
 from skmp.solver.ompl_solver import OMPLSolver, OMPLSolverConfig
-from skrobot.coordinates import Coordinates
+from skrobot.coordinates import Coordinates, rpy_angle
 from skrobot.interfaces.ros import PR2ROSRobotInterface
 from skrobot.model.primitives import Axis, Box, Cylinder
 from skrobot.models.pr2 import PR2
@@ -35,6 +36,7 @@ from skrobot.sdf import UnionSDF
 from skrobot.viewers import TrimeshSceneViewer
 from sound_play.libsoundplay import SoundClient
 from std_msgs.msg import Header
+from tinyfk import RotationType
 from utils import CoordinateTransform, chain_transform
 
 
@@ -105,26 +107,39 @@ class PlanningCongig:
     colfree_const_magcup: CollFreeConst
     box_const: BoxConst
     efkin: ArticulatedEndEffectorKinematicsMap
+    table: Box
+    magcup: Cylinder
 
-    def __init__(self, tf_obj_base: CoordinateTransform, pr2: PR2):
-        pr2_plan_conf = PR2Config(control_arm="larm")
+    def __init__(
+        self,
+        tf_obj_base: CoordinateTransform,
+        pr2: PR2,
+        consider_dummy_obstacle: bool = True,
+        arm="larm",
+    ):
+        pr2_plan_conf = PR2Config(control_arm=arm)
         joint_names = pr2_plan_conf._get_control_joint_names()
 
         colkin = pr2_plan_conf.get_collision_kin()
         table = Box([0.88, 1.0, 0.1], pos=[0.6, 0.0, 0.66], with_sdf=True)
         dummy_obstacle = Box([0.45, 0.6, 0.03], pos=[0.5, 0.0, 1.2], with_sdf=True)
         dummy_obstacle.visual_mesh.visual.face_colors = [255, 255, 255, 150]  # type: ignore
+        if consider_dummy_obstacle:
+            table_sdfs = [table.sdf, dummy_obstacle.sdf]
+        else:
+            table_sdfs = [table.sdf]
+
         magcup = Cylinder(0.0525, 0.12, with_sdf=True)
         magcup.visual_mesh.visual.face_colors = [255, 0, 0, 150]  # type: ignore
         magcup.newcoords(tf_obj_base.to_skrobot_coords())
         magcup.translate([0, 0, -0.03])
-        sdf_all = UnionSDF([table.sdf, magcup.sdf, dummy_obstacle.sdf])
-        colfree_const_all = CollFreeConst(colkin, sdf_all, pr2)
-        colfree_const_table = CollFreeConst(colkin, UnionSDF([table.sdf, dummy_obstacle.sdf]), pr2)
+
+        colfree_const_all = CollFreeConst(colkin, UnionSDF(table_sdfs + [magcup.sdf]), pr2)
+        colfree_const_table = CollFreeConst(colkin, UnionSDF(table_sdfs), pr2)
         colfree_const_magcup = CollFreeConst(colkin, magcup.sdf, pr2)
 
         box_const = pr2_plan_conf.get_box_const()
-        efkin = pr2_plan_conf.get_endeffector_kin()
+        efkin = pr2_plan_conf.get_endeffector_kin(rot_type=RotationType.XYZW)
 
         self.joint_names = joint_names
         self.colfree_const_all = colfree_const_all
@@ -132,6 +147,8 @@ class PlanningCongig:
         self.colfree_const_magcup = colfree_const_magcup
         self.box_const = box_const
         self.efkin = efkin
+        self.table = table
+        self.magcup = magcup
 
 
 class Executor:
@@ -171,6 +188,7 @@ class Executor:
             self.sound_client = SoundClient()
             self.ri = RobotInterfaceWrap(pr2)
             self.ri.move_gripper("larm", 0.05)
+            self.ri.move_gripper("rarm", 0.03)
             self.ri.angle_vector(self.pr2.angle_vector())
             self.ri.wait_interpolation()
             time.sleep(2.0)
@@ -213,6 +231,148 @@ class Executor:
                     return False
                 elif user_input.lower() == "r":
                     return None
+
+    @lru_cache(maxsize=1)
+    def recovery_ik_lib(self) -> List[np.ndarray]:
+        pr2 = PR2()
+        arm = pr2.rarm
+        end_coords = pr2.rarm_end_coords
+        lib = []
+        while len(lib) < 30:
+            pr2.reset_manip_pose()
+            x = np.random.uniform(0.3, 0.6)
+            y = np.random.uniform(-0.5, 0.5)
+            z = np.random.uniform(0.7, 0.9)
+            co = Coordinates(pos=[x, y, z], rot=[0.0, 1.6, 0.5])
+
+            out = arm.inverse_kinematics(co, link_list=arm.link_list, move_target=end_coords)
+            if out is not False:
+                lib.append(np.array(out))
+        return lib
+
+    def recover(self, obj_displacement: Optional[np.ndarray] = None) -> Optional[bool]:
+
+        if self.is_simulation:
+            return
+        self.reset()
+
+        def create_pregrasp_and_grasp_poses(co_obj):
+            co_pregrasp = co_obj.copy_worldcoords()
+            co_pregrasp.translate([0.05, 0.0, 0.0])
+            co_pregrasp.translate([0.0, 0.0, +0.08])
+            co_pregrasp.rotate(+np.pi * 0.5, "y")
+            co_pregrasp.rotate(-np.pi * 0.5, "x")
+
+            co_grasp = co_pregrasp.copy_worldcoords()
+            co_grasp.translate([0.063, 0.0, 0.0])
+            return co_pregrasp, co_grasp
+
+        while not executor.msg_available():
+            time.sleep(0.1)
+        co_obj = self.tf_obj_base.to_skrobot_coords()
+        co_pregrasp, co_grasp = create_pregrasp_and_grasp_poses(co_obj)
+
+        if obj_displacement is None:
+            # move to default pose
+            desired_pos_xy = np.array([0.45, 0.0])
+            diff_pos_xy = desired_pos_xy - co_obj.worldpos()[:2]
+            disired_yaw = -np.pi * 0.5
+            yaw_now = rpy_angle(co_obj.worldrot())[0][0]
+            diff_yaw = disired_yaw - yaw_now
+            obj_displacement = np.array([diff_pos_xy[0], diff_pos_xy[1], diff_yaw])
+        assert np.any(np.abs(obj_displacement) > 0.1)
+
+        co_obj_desired = co_obj.copy_worldcoords()
+        co_obj_desired.translate([obj_displacement[0], obj_displacement[1], 0.0], wrt="world")
+        co_obj_desired.rotate(obj_displacement[2], "z")
+        co_predesired, co_desired = create_pregrasp_and_grasp_poses(co_obj_desired)
+
+        plan_config = PlanningCongig(
+            self.tf_obj_base, self.pr2, consider_dummy_obstacle=False, arm="rarm"
+        )
+        q_init = get_robot_state(self.pr2, plan_config.joint_names)
+
+        class _PlanningFailure(Exception):
+            pass
+
+        def solve_ik_with_collision_check(
+            q_seed, co_target, colfree_const
+        ) -> Tuple[np.ndarray, np.ndarray]:
+            self.pr2.rarm.angle_vector(q_seed)
+            ret = self.pr2.inverse_kinematics(
+                co_target, link_list=self.pr2.rarm.link_list, move_target=self.pr2.rarm_end_coords
+            )
+            if ret is False:
+                raise _PlanningFailure()
+            q = self.pr2.rarm.angle_vector()
+            av = self.pr2.angle_vector()
+            if not colfree_const.is_valid(q):
+                raise _PlanningFailure()
+            return q, av
+
+        def point_to_point_connection(q1, q2, colfree_const, n_wp=8) -> List[np.ndarray]:
+            point_const = ConfigPointConst(q2)
+            problem = Problem(q1, plan_config.box_const, point_const, colfree_const, None)
+            ompl_config = OMPLSolverConfig(n_max_call=2000, simplify=True)
+            ompl_solver = OMPLSolver.init(ompl_config).as_parallel_solver()
+            ompl_solver.setup(problem)
+            res = ompl_solver.solve()
+            if res.traj is None:
+                raise _PlanningFailure()
+            q_list = list(res.traj.resample(n_wp).numpy())
+            return q_list
+
+        for q_seed_lib in self.recovery_ik_lib():
+
+            try:
+                # phase1
+                q_pregrasp, av_pregrasp = solve_ik_with_collision_check(
+                    q_seed_lib, co_pregrasp, plan_config.colfree_const_all
+                )
+                q_init_to_q_pregrasp = point_to_point_connection(
+                    q_init, q_pregrasp, plan_config.colfree_const_all
+                )
+                q_grasp, av_grasp = solve_ik_with_collision_check(
+                    q_pregrasp, co_grasp, plan_config.colfree_const_table
+                )
+                q_list_reach = q_init_to_q_pregrasp + [q_grasp]
+
+                # phase2
+                q_predesired, av_predesired = solve_ik_with_collision_check(
+                    q_pregrasp, co_predesired, plan_config.colfree_const_table
+                )
+                q_pregrasp_to_q_predesired = point_to_point_connection(
+                    q_pregrasp, q_predesired, plan_config.colfree_const_table
+                )
+                q_desired, av_desired = solve_ik_with_collision_check(
+                    q_predesired, co_desired, plan_config.colfree_const_table
+                )
+                q_list_place = [q_pregrasp] + q_pregrasp_to_q_predesired + [q_desired]
+
+                self.sound_client.say("plan to recovery success. Robot will move.")
+                avs = []
+                for q in q_list_reach:
+                    set_robot_state(self.pr2, plan_config.joint_names, q)
+                    avs.append(self.pr2.angle_vector())
+
+                times = [0.6] * (len(avs) - 2) + [1.0, 2.0]
+                self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
+                self.ri.wait_interpolation()
+                self.ri.move_gripper("rarm", 0.0)
+
+                avs = []
+                for q in q_list_place:
+                    set_robot_state(self.pr2, plan_config.joint_names, q)
+                    avs.append(self.pr2.angle_vector())
+
+                times = [0.6] * (len(avs) - 2) + [1.0, 2.0]
+                self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
+                self.ri.wait_interpolation()
+                self.ri.move_gripper("rarm", 0.03)
+                return True
+            except _PlanningFailure:
+                continue
+        return False
 
     def robust_execute(
         self,
@@ -524,6 +684,8 @@ if __name__ == "__main__":
         n_init_sample = 5
         X, Y = [], []
         executor = Executor(None, auto_annotation=True)
+        executor.recover()
+        assert False
 
         # param init is assumed to be success with zero error
         X.append(np.hstack([param_init, np.zeros(3)]))
