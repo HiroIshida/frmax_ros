@@ -103,8 +103,9 @@ class Executor:
     ri: PR2ROSRobotInterface
     is_simulation: bool
     q_home: np.ndarray
+    auto_annotation: bool
 
-    def __init__(self, debug_pose_msg: Optional[PoseStamped]):
+    def __init__(self, debug_pose_msg: Optional[PoseStamped], auto_annotation: bool = False):
         pr2 = PR2(use_tight_joint_limit=False)
         pr2.reset_manip_pose()
         self.pr2 = pr2
@@ -117,6 +118,7 @@ class Executor:
         pr2_plan_conf = PR2Config(control_arm="larm")
         joint_names = pr2_plan_conf._get_control_joint_names()
         self.q_home = get_robot_state(self.pr2, joint_names)
+        self.auto_annotation = auto_annotation
 
         self.is_simulation = debug_pose_msg is not None
         print("is_simulation: {}".format(self.is_simulation))
@@ -153,16 +155,24 @@ class Executor:
             return
         self.tf_obj_base = None
 
-    @staticmethod
-    def wait_for_label() -> Optional[bool]:
-        while True:
-            user_input = input("Add label: Enter 'y' for True or 'n' for False, r for retry")
-            if user_input.lower() == "y":
+    def wait_for_label(self) -> Optional[bool]:
+        if self.auto_annotation:
+            gripper_pos = self.ri.gripper_states["larm"].process_value
+            if gripper_pos > 0.005:
                 return True
-            elif user_input.lower() == "n":
+            elif gripper_pos < 0.002:
                 return False
-            elif user_input.lower() == "r":
-                return None
+            else:
+                assert False
+        else:
+            while True:
+                user_input = input("Add label: Enter 'y' for True or 'n' for False, r for retry")
+                if user_input.lower() == "y":
+                    return True
+                elif user_input.lower() == "n":
+                    return False
+                elif user_input.lower() == "r":
+                    return None
 
     def robust_execute(
         self,
@@ -478,7 +488,7 @@ if __name__ == "__main__":
         # create initial dataset
         n_init_sample = 5
         X, Y = [], []
-        executor = Executor(None)
+        executor = Executor(None, auto_annotation=True)
 
         # param init is assumed to be success with zero error
         X.append(np.hstack([param_init, np.zeros(3)]))
