@@ -124,7 +124,7 @@ class Executor:
         tf.dest = "base"
         self.tf_obj_base = tf
 
-    def plannable(self) -> bool:
+    def msg_available(self) -> bool:
         return self.tf_obj_base is not None
 
     def reset(self) -> None:
@@ -150,7 +150,7 @@ class Executor:
         rot: float = -np.pi * 0.5,
     ) -> bool:
         while True:
-            while not executor.plannable():
+            while not executor.msg_available():
                 time.sleep(0.1)
             y = self.execute(planer_pose_traj, hypo_error=hypo_error)
             self.reset()
@@ -170,7 +170,7 @@ class Executor:
         hypo_error: Optional[np.ndarray] = None,
         rot: float = -np.pi * 0.5,
     ) -> Optional[bool]:
-        assert self.plannable()
+        assert self.msg_available()
         assert self.tf_obj_base is not None
         rospy.loginfo("tf_obj_base: {}".format(self.tf_obj_base))
         if hypo_error is None:
@@ -207,13 +207,17 @@ class Executor:
 
         colkin = pr2_plan_conf.get_collision_kin()
         table = Box([0.88, 1.0, 0.1], pos=[0.6, 0.0, 0.66], with_sdf=True)
+        dummy_obstacle = Box([0.45, 0.6, 0.03], pos=[0.5, 0.0, 1.2], with_sdf=True)
+        dummy_obstacle.visual_mesh.visual.face_colors = [255, 255, 255, 150]  # type: ignore
         magcup = Cylinder(0.05, 0.12, with_sdf=True)
         magcup.visual_mesh.visual.face_colors = [255, 0, 0, 150]  # type: ignore
         magcup.newcoords(self.tf_obj_base.to_skrobot_coords())
         magcup.translate([0, 0, -0.03])
-        sdf_all = UnionSDF([table.sdf, magcup.sdf])
+        sdf_all = UnionSDF([table.sdf, magcup.sdf, dummy_obstacle.sdf])
         colfree_const_all = CollFreeConst(colkin, sdf_all, self.pr2)
-        colfree_const_table = CollFreeConst(colkin, table.sdf, self.pr2)
+        colfree_const_table = CollFreeConst(
+            colkin, UnionSDF([table.sdf, dummy_obstacle.sdf]), self.pr2
+        )
         colfree_const_magcup = CollFreeConst(colkin, magcup.sdf, self.pr2)
 
         box_const = pr2_plan_conf.get_box_const()
@@ -233,7 +237,7 @@ class Executor:
         box_const_dummy = copy.deepcopy(box_const)
         box_const_dummy.lb -= 3.0
         box_const_dummy.ub += 3.0
-        ret = satisfy_by_optimization(pose_const, box_const, None, q_init, config=satis_con)
+        ret = satisfy_by_optimization(pose_const, box_const_dummy, None, q_init, config=satis_con)
         if not ret.success:
             rospy.logwarn("failed to plan to initial pose without collision constraint")
             return None
@@ -291,6 +295,7 @@ class Executor:
             axis = Axis.from_coords(co_reach)
             viewer.add(self.pr2)
             viewer.add(table)
+            viewer.add(dummy_obstacle)
             viewer.add(magcup)
             viewer.add(axis)
             viewer.show()
