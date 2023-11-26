@@ -1,8 +1,11 @@
+import argparse
 import copy
 import os
+import pickle
 import sys
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
@@ -15,8 +18,9 @@ from frmax2.core import (
 )
 from geometry_msgs.msg import PoseStamped
 from movement_primitives.dmp import DMP
-from rospy import Subscriber
-from skmp.constraint import CollFreeConst, PoseConstraint
+from nav_msgs.msg import Path as RosPath
+from rospy import Publisher, Subscriber
+from skmp.constraint import CollFreeConst, ConfigPointConst, PoseConstraint
 from skmp.robot.pr2 import PR2Config
 from skmp.robot.utils import get_robot_state, set_robot_state
 from skmp.satisfy import SatisfactionConfig, satisfy_by_optimization
@@ -28,6 +32,7 @@ from skrobot.model.primitives import Axis, Box, Cylinder
 from skrobot.models.pr2 import PR2
 from skrobot.sdf import UnionSDF
 from skrobot.viewers import TrimeshSceneViewer
+from std_msgs.msg import Header
 from utils import CoordinateTransform, chain_transform
 
 
@@ -88,10 +93,11 @@ class RobotInterfaceWrap(PR2ROSRobotInterface):
 
 class Executor:
     tf_obj_base: Optional[CoordinateTransform]
-    msg_raw: Optional[PoseStamped]
+    raw_msg: Optional[PoseStamped]
     pr2: PR2
     ri: PR2ROSRobotInterface
     is_simulation: bool
+    q_home: np.ndarray
 
     def __init__(self, debug_pose_msg: Optional[PoseStamped]):
         pr2 = PR2(use_tight_joint_limit=False)
@@ -103,14 +109,18 @@ class Executor:
         self.pr2.l_shoulder_lift_joint.joint_angle(-0.5)
         self.pr2.l_wrist_roll_joint.joint_angle(0.0)
         self.pr2.head_tilt_joint.joint_angle(+1.0)
+        pr2_plan_conf = PR2Config(control_arm="larm")
+        joint_names = pr2_plan_conf._get_control_joint_names()
+        self.q_home = get_robot_state(self.pr2, joint_names)
 
         self.is_simulation = debug_pose_msg is not None
+        print("is_simulation: {}".format(self.is_simulation))
         if self.is_simulation:
             tf = CoordinateTransform.from_ros_pose(debug_pose_msg.pose)
             tf.src = "object"
             tf.dest = "base"
             self.tf_obj_base = tf
-            self.msg_raw = debug_pose_msg
+            self.raw_msg = debug_pose_msg
         else:
             self.ri = RobotInterfaceWrap(pr2)
             self.ri.move_gripper("larm", 0.05)
@@ -118,14 +128,12 @@ class Executor:
             self.ri.wait_interpolation()
             time.sleep(2.0)
 
+            self.pub = Publisher("/debug_trajectory", RosPath, queue_size=1, latch=True)
             self.sub = Subscriber("/object_pose", PoseStamped, self.callback)
             self.tf_obj_base = None
-            self.msg_raw = None
 
     def callback(self, msg: PoseStamped):
-        msg_raw = copy.deepcopy(msg)
-        self.msg_raw = msg_raw
-
+        self.raw_msg = copy.deepcopy(msg)
         msg.pose.position.z = 0.8  # for cup
         tf = CoordinateTransform.from_ros_pose(msg.pose)
         tf.src = "object"
@@ -139,7 +147,6 @@ class Executor:
         if self.is_simulation:
             return
         self.tf_obj_base = None
-        self.msg_raw = None
 
     @staticmethod
     def wait_for_label() -> Optional[bool]:
@@ -181,9 +188,11 @@ class Executor:
     ) -> Optional[bool]:
         assert self.msg_available()
         assert self.tf_obj_base is not None
-        marker_height_original = self.msg_raw.pose.position.z
         rospy.loginfo("tf_obj_base: {}".format(self.tf_obj_base))
-        rospy.loginfo("marker_height_original: {}".format(marker_height_original))
+
+        path_debug_args = Path("/tmp/frmax_debug_args.pkl")
+        with path_debug_args.open("wb") as f:
+            pickle.dump((planer_pose_traj, hypo_error, rot, self.raw_msg), f)
 
         if hypo_error is None:
             hypo_error = np.zeros(3)
@@ -213,6 +222,22 @@ class Executor:
             co_reach = tf_reach_base.to_skrobot_coords()
             coords_list.append(co_reach)
 
+        debug_path = RosPath()
+        common_header = Header()
+        common_header.stamp = rospy.Time.now()
+        common_header.frame_id = "base_footprint"
+        for co in coords_list:
+            pose_msg = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
+            pose_stamped_msg = PoseStamped(pose=pose_msg)
+            pose_stamped_msg.header = common_header
+        pose_msg_list = [
+            CoordinateTransform.from_skrobot_coords(co).to_ros_pose() for co in coords_list
+        ]
+        pose_stamped_msg_list = [PoseStamped(pose=msg) for msg in pose_msg_list]
+        debug_path.header = common_header
+        debug_path.poses = pose_stamped_msg_list
+        self.pub.publish(debug_path)
+
         # setup common stuff
         pr2_plan_conf = PR2Config(control_arm="larm")
         joint_names = pr2_plan_conf._get_control_joint_names()
@@ -221,7 +246,7 @@ class Executor:
         table = Box([0.88, 1.0, 0.1], pos=[0.6, 0.0, 0.66], with_sdf=True)
         dummy_obstacle = Box([0.45, 0.6, 0.03], pos=[0.5, 0.0, 1.2], with_sdf=True)
         dummy_obstacle.visual_mesh.visual.face_colors = [255, 255, 255, 150]  # type: ignore
-        magcup = Cylinder(0.05, 0.12, with_sdf=True)
+        magcup = Cylinder(0.0525, 0.12, with_sdf=True)
         magcup.visual_mesh.visual.face_colors = [255, 0, 0, 150]  # type: ignore
         magcup.newcoords(self.tf_obj_base.to_skrobot_coords())
         magcup.translate([0, 0, -0.03])
@@ -258,7 +283,7 @@ class Executor:
             rospy.loginfo("initial pose is not collision free. consider it as failure")
             return False
 
-        def whole_plan() -> Optional[List[np.ndarray]]:
+        def whole_plan(n_resample) -> Optional[List[np.ndarray]]:
             # solve full plan to initial pose
             pose_const = PoseConstraint.from_skrobot_coords([co_reach_init], efkin, self.pr2)
             problem = Problem(q_init, box_const, pose_const, colfree_const_all, None)
@@ -271,7 +296,7 @@ class Executor:
                 return None
 
             # solve ik for each pose
-            q_list = list(res.traj.resample(8).numpy())
+            q_list = list(res.traj.resample(n_resample).numpy())
             for co_reach in coords_list[1:]:
                 set_robot_state(self.pr2, joint_names, q_list[-1])
                 pose_const = PoseConstraint.from_skrobot_coords([co_reach], efkin, self.pr2)
@@ -289,9 +314,10 @@ class Executor:
                 q_list.append(ret.q)
             return q_list
 
+        n_resample = 8
         q_list = None
         for _ in range(5):
-            q_list = whole_plan()
+            q_list = whole_plan(n_resample)
             if q_list is None:
                 rospy.logwarn("failed to plan, retrying...")
                 continue
@@ -302,14 +328,17 @@ class Executor:
             rospy.logwarn("failed to plan")
             return None
 
-        if False:
+        if self.is_simulation:
             viewer = TrimeshSceneViewer()
+            co_object = self.tf_obj_base.to_skrobot_coords()
+            axis_object = Axis.from_coords(co_object)
             axis = Axis.from_coords(co_reach)
             viewer.add(self.pr2)
             viewer.add(table)
             viewer.add(dummy_obstacle)
             viewer.add(magcup)
             viewer.add(axis)
+            viewer.add(axis_object)
             viewer.show()
             for q in q_list:
                 set_robot_state(self.pr2, joint_names, q)
@@ -327,44 +356,48 @@ class Executor:
                 set_robot_state(self.pr2, joint_names, q)
                 avs.append(self.pr2.angle_vector())
 
-            times = (
-                [0.3 for _ in range(6)]
-                + [0.6 for _ in range(2)]
-                + [0.5 for _ in range(len(planer_pose_traj) - 1)]
-            )
-            assert len(times) == len(avs)
-            self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
+            times_reach = [0.4 for _ in range(n_resample)]
+            times_grasp = [0.5 for _ in range(len(planer_pose_traj) - 1)]
+            avs_reach, avs_grasp = avs[:n_resample], avs[n_resample:]
+            self.ri.angle_vector_sequence(avs_reach, times=times_reach, time_scale=1.0)
             self.ri.wait_interpolation()
+            time.sleep(1.5)
+            self.ri.angle_vector_sequence(avs_grasp, times=times_grasp, time_scale=1.0)
+            self.ri.wait_interpolation()
+
             self.ri.move_gripper("larm", 0.0)
-            auto_label = True
-            if auto_label:
-                # move larm up a bit to check if the object is lifted
-                av_current = self.ri.potentio_vector()
-                self.pr2.angle_vector(av_current)
-                self.pr2.larm.move_end_pos([0.0, 0.0, 0.1], wrt="world")
-                self.ri.angle_vector(self.pr2.angle_vector())
-                self.ri.wait_interpolation()
-                self.reset()
-                while not executor.msg_available():
-                    time.sleep(0.1)
-                marker_height_now = self.msg_raw.pose.position.z
-                rospy.loginfo(
-                    "height_now: {}, marker_original: {}".format(
-                        marker_height_now, marker_height_original
-                    )
-                )
-                label = marker_height_now - marker_height_original > 0.03
-                # return to original pose
-                self.pr2.angle_vector(av_current)
-                self.ri.angle_vector(self.pr2.angle_vector())
-                self.ri.wait_interpolation()
-            else:
-                label = self.wait_for_label()
+            label = self.wait_for_label()
             self.ri.move_gripper("larm", 0.05)
             rospy.loginfo("play back")
-            self.ri.angle_vector_sequence(avs[::-1], times=[0.2] * len(avs), time_scale=1.0)
+            self.ri.angle_vector_sequence(
+                avs_reach[::-1], times=[0.4] * len(avs_reach), time_scale=1.0
+            )
             self.ri.wait_interpolation()
             self.pr2.angle_vector(self.ri.potentio_vector())
+
+            # check if actually played back
+            q_now = get_robot_state(self.pr2, joint_names)
+            diff = q_now - self.q_home
+            if np.any(diff > 0.1):
+                rospy.logwarn("failed to play back. plan again...")
+                q_home = get_robot_state(self.pr2, joint_names)
+                configuration_const = ConfigPointConst(q_home)
+                problem = Problem(q_now, box_const, configuration_const, colfree_const_table, None)
+                ompl_config = OMPLSolverConfig(n_max_call=2000, simplify=True)
+                ompl_solver = OMPLSolver.init(ompl_config).as_parallel_solver()
+                ompl_solver.setup(problem)
+                res = ompl_solver.solve()
+                if res.traj is None:
+                    rospy.logerr("failed to plan to home pose (should not happen)")
+                    return None
+                assert res.traj is not None
+                q_list = list(res.traj.resample(n_resample).numpy())
+                for q in q_list:
+                    set_robot_state(self.pr2, joint_names, q)
+                    self.ri.angle_vector(self.pr2.angle_vector())
+                    self.ri.wait_interpolation()
+                rospy.loginfo("at home position")
+
             return label
 
 
@@ -397,27 +430,35 @@ def create_trajectory(param: np.ndarray, dt: float = 0.1) -> np.ndarray:
 
 
 if __name__ == "__main__":
-    debug_pose_msg = PoseStamped()
-    # debug_pose_msg.pose.position.x = 0.47641722876585824
-    debug_pose_msg.pose.position.x = 0.57641722876585824
-    debug_pose_msg.pose.position.y = -0.054688228244401484
-    debug_pose_msg.pose.position.z = 0.8
-    debug_pose_msg.pose.orientation.x = 0.0
-    debug_pose_msg.pose.orientation.y = 0.0
-    debug_pose_msg.pose.orientation.z = -0.6325926153678488
-    debug_pose_msg.pose.orientation.w = 0.7744847209481055
+    import argparse
 
-    # executor = Executor(debug_pose_msg)
-    executor = Executor(None)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reproduce", action="store_true", help="reprodice the debug arg")
+    args = parser.parse_args()
 
-    debug: bool = True
-    if debug:
-        param = np.random.randn(21) * 0.0
-        planer_traj = create_trajectory(param)
+    if args.reproduce:
+        file_path = Path("/tmp/frmax_debug_args.pkl")
+        if file_path.exists():
+            with Path("/tmp/frmax_debug_args.pkl").open("rb") as f:
+                planer_traj, hypo_error, rot, raw_msg = pickle.load(f)
+        else:
+            param = np.random.randn(21) * 0.0
+            planer_traj = create_trajectory(param)
+            hypo_error = np.zeros(3)
+            rot = -np.pi * 0.5
 
-        # wait until the object pose is received
+            raw_msg = PoseStamped()
+            raw_msg.pose.position.x = 0.47641722876585824
+            raw_msg.pose.position.y = -0.054688228244401484
+            raw_msg.pose.position.z = 0.8
+            raw_msg.pose.orientation.x = 0.0
+            raw_msg.pose.orientation.y = 0.0
+            raw_msg.pose.orientation.z = -0.6325926153678488
+            raw_msg.pose.orientation.w = 0.7744847209481055
+
+        executor = Executor(raw_msg)
         rospy.loginfo("Object pose is received")
-        out = executor.robust_execute(planer_traj)
+        out = executor.robust_execute(planer_traj, hypo_error=hypo_error, rot=rot)
         rospy.loginfo("label: {}".format(out))
     else:
 
@@ -430,13 +471,20 @@ if __name__ == "__main__":
         param_init = np.zeros(21)
         traj = create_trajectory(param_init)
         # create initial dataset
-        n_init_sample = 10
+        n_init_sample = 5
         X, Y = [], []
+        executor = Executor(None)
+
+        # param init is assumed to be success with zero error
+        X.append(np.hstack([param_init, np.zeros(3)]))
+        Y.append(True)
+
         for _ in range(n_init_sample):
             error = sample_situation()
             is_success = executor.robust_execute(traj, hypo_error=error)
             X.append(np.hstack([param_init, error]))
             Y.append(is_success)
+        rospy.loginfo("Y: {}".format(Y))
 
         X = np.array(X)
         Y = np.array(Y)
