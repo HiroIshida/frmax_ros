@@ -94,11 +94,15 @@ class LaserScanToPointCloud:
         assert msg.header.frame_id == "base_footprint"
         gen = pc2.read_points(msg, skip_nans=True, field_names=("x", "y", "z"))
         points = np.array(list(gen))
+        center = np.mean(points, axis=0)
+        std = np.std(points, axis=0)
+        points = points[np.abs(points[:, 2] - center[2]) < std[2]]
+
         points_xy = points[:, :2]
         if points_xy.shape[0] < 20:
             rospy.logwarn("too few points")
             return
-        center = np.mean(points, axis=0)
+
         pca = PCA(n_components=1)
         pca.fit(points_xy)
         direction_vector = pca.components_[0]
