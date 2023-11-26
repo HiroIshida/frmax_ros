@@ -78,7 +78,7 @@ class LaserScanToPointCloud:
         self.object_pose_raw_publisher = rospy.Publisher(
             "/object_pose_raw", PoseStamped, queue_size=10
         )
-        self.pose_average_queue = AverageQueue(20)
+        self.pose_average_queue = AverageQueue(10)
 
     def xyzyaw_to_pose_stamped(self, xyzyaw: np.ndarray) -> PoseStamped:
         pose_stamped = PoseStamped()
@@ -116,7 +116,7 @@ class LaserScanToPointCloud:
         bad_status_list = []
         pose_std = self.pose_average_queue.get_std()
         rospy.loginfo("pose std: {}".format(pose_std))
-        if pose_std[0] > 0.005 or pose_std[1] > 0.005 or pose_std[2] > 0.005 or pose_std[2] > 0.02:
+        if pose_std[0] > 0.005 or pose_std[1] > 0.005 or pose_std[2] > 0.005 or pose_std[3] > 0.02:
             bad_status_list.append("pose not steady: {}".format(pose_std))
         if len(bad_status_list) > 0:
             rospy.logwarn("Bad status: {}".format(", ".join(bad_status_list)))
