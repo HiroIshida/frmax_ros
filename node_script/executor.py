@@ -32,6 +32,7 @@ from skrobot.model.primitives import Axis, Box, Cylinder
 from skrobot.models.pr2 import PR2
 from skrobot.sdf import UnionSDF
 from skrobot.viewers import TrimeshSceneViewer
+from sound_play.libsoundplay import SoundClient
 from std_msgs.msg import Header
 from utils import CoordinateTransform, chain_transform
 
@@ -104,6 +105,7 @@ class Executor:
     is_simulation: bool
     q_home: np.ndarray
     auto_annotation: bool
+    sound_client: SoundClient
 
     def __init__(self, debug_pose_msg: Optional[PoseStamped], auto_annotation: bool = False):
         pr2 = PR2(use_tight_joint_limit=False)
@@ -129,6 +131,7 @@ class Executor:
             self.tf_obj_base = tf
             self.raw_msg = debug_pose_msg
         else:
+            self.sound_client = SoundClient()
             self.ri = RobotInterfaceWrap(pr2)
             self.ri.move_gripper("larm", 0.05)
             self.ri.angle_vector(self.pr2.angle_vector())
@@ -187,7 +190,7 @@ class Executor:
             self.reset()
             if y is not None:
                 return y
-            rospy.logwarn("plan failed. Please put obejct in different pose")
+            self.sound_client.say("plan failed. Please put obejct in different pose")
             rospy.logwarn("error: {}".format(hypo_error))
             while True:
                 user_input = input("push y to retry")
@@ -339,6 +342,7 @@ class Executor:
                 break
         if q_list is None:
             rospy.logwarn("failed to plan")
+            self.sound_client.say("failed to plan. Please change the object pose.")
             return None
 
         if self.is_simulation:
@@ -372,8 +376,11 @@ class Executor:
             times_reach = [0.4 for _ in range(n_resample)]
             times_grasp = [0.5 for _ in range(len(planer_pose_traj) - 1)]
             avs_reach, avs_grasp = avs[:n_resample], avs[n_resample:]
+            self.sound_client.say("reaching")
             self.ri.angle_vector_sequence(avs_reach, times=times_reach, time_scale=1.0)
             self.ri.wait_interpolation()
+
+            self.sound_client.say("contact motion")
             time.sleep(1.5)
             self.ri.angle_vector_sequence(avs_grasp, times=times_grasp, time_scale=1.0)
             self.ri.wait_interpolation()
@@ -401,7 +408,7 @@ class Executor:
                 res = ompl_solver.solve()
                 if res.traj is None:
                     rospy.logerr("failed to plan to home pose (should not happen)")
-                    return None
+                    assert False
                 assert res.traj is not None
                 q_list = list(res.traj.resample(n_resample).numpy())
                 for q in q_list:
@@ -410,6 +417,10 @@ class Executor:
                     self.ri.wait_interpolation()
                 rospy.loginfo("at home position")
 
+            if label:
+                self.sound_client.say("success")
+            else:
+                self.sound_client.say("failure")
             return label
 
 
