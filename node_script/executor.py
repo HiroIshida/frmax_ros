@@ -20,7 +20,8 @@ from geometry_msgs.msg import PoseStamped
 from movement_primitives.dmp import DMP
 from nav_msgs.msg import Path as RosPath
 from rospy import Publisher, Subscriber
-from skmp.constraint import CollFreeConst, ConfigPointConst, PoseConstraint
+from skmp.constraint import BoxConst, CollFreeConst, ConfigPointConst, PoseConstraint
+from skmp.kinematics import ArticulatedEndEffectorKinematicsMap
 from skmp.robot.pr2 import PR2Config
 from skmp.robot.utils import get_robot_state, set_robot_state
 from skmp.satisfy import SatisfactionConfig, satisfy_by_optimization
@@ -95,6 +96,42 @@ class RobotInterfaceWrap(PR2ROSRobotInterface):
             if np.any(np.isinf(av)) or np.any(np.isnan(av)):
                 raise ValueError("angle vector contains inf or nan")
         super().angle_vector_sequence(avs, **kwargs)
+
+
+class PlanningCongig:
+    joint_names: List[str]
+    colfree_const_all: CollFreeConst
+    colfree_const_table: CollFreeConst
+    colfree_const_magcup: CollFreeConst
+    box_const: BoxConst
+    efkin: ArticulatedEndEffectorKinematicsMap
+
+    def __init__(self, tf_obj_base: CoordinateTransform, pr2: PR2):
+        pr2_plan_conf = PR2Config(control_arm="larm")
+        joint_names = pr2_plan_conf._get_control_joint_names()
+
+        colkin = pr2_plan_conf.get_collision_kin()
+        table = Box([0.88, 1.0, 0.1], pos=[0.6, 0.0, 0.66], with_sdf=True)
+        dummy_obstacle = Box([0.45, 0.6, 0.03], pos=[0.5, 0.0, 1.2], with_sdf=True)
+        dummy_obstacle.visual_mesh.visual.face_colors = [255, 255, 255, 150]  # type: ignore
+        magcup = Cylinder(0.0525, 0.12, with_sdf=True)
+        magcup.visual_mesh.visual.face_colors = [255, 0, 0, 150]  # type: ignore
+        magcup.newcoords(tf_obj_base.to_skrobot_coords())
+        magcup.translate([0, 0, -0.03])
+        sdf_all = UnionSDF([table.sdf, magcup.sdf, dummy_obstacle.sdf])
+        colfree_const_all = CollFreeConst(colkin, sdf_all, pr2)
+        colfree_const_table = CollFreeConst(colkin, UnionSDF([table.sdf, dummy_obstacle.sdf]), pr2)
+        colfree_const_magcup = CollFreeConst(colkin, magcup.sdf, pr2)
+
+        box_const = pr2_plan_conf.get_box_const()
+        efkin = pr2_plan_conf.get_endeffector_kin()
+
+        self.joint_names = joint_names
+        self.colfree_const_all = colfree_const_all
+        self.colfree_const_table = colfree_const_table
+        self.colfree_const_magcup = colfree_const_magcup
+        self.box_const = box_const
+        self.efkin = efkin
 
 
 class Executor:
@@ -255,30 +292,15 @@ class Executor:
             debug_path.poses = pose_stamped_msg_list
             self.pub.publish(debug_path)
 
-        # setup common stuff
-        pr2_plan_conf = PR2Config(control_arm="larm")
-        joint_names = pr2_plan_conf._get_control_joint_names()
-
-        colkin = pr2_plan_conf.get_collision_kin()
-        table = Box([0.88, 1.0, 0.1], pos=[0.6, 0.0, 0.66], with_sdf=True)
-        dummy_obstacle = Box([0.45, 0.6, 0.03], pos=[0.5, 0.0, 1.2], with_sdf=True)
-        dummy_obstacle.visual_mesh.visual.face_colors = [255, 255, 255, 150]  # type: ignore
-        magcup = Cylinder(0.0525, 0.12, with_sdf=True)
-        magcup.visual_mesh.visual.face_colors = [255, 0, 0, 150]  # type: ignore
-        magcup.newcoords(self.tf_obj_base.to_skrobot_coords())
-        magcup.translate([0, 0, -0.03])
-        sdf_all = UnionSDF([table.sdf, magcup.sdf, dummy_obstacle.sdf])
-        colfree_const_all = CollFreeConst(colkin, sdf_all, self.pr2)
-        colfree_const_table = CollFreeConst(
-            colkin, UnionSDF([table.sdf, dummy_obstacle.sdf]), self.pr2
-        )
-        colfree_const_magcup = CollFreeConst(colkin, magcup.sdf, self.pr2)
-
-        box_const = pr2_plan_conf.get_box_const()
+        plan_config = PlanningCongig(self.tf_obj_base, self.pr2)
+        joint_names = plan_config.joint_names
         q_init = get_robot_state(self.pr2, joint_names)
-
-        efkin = pr2_plan_conf.get_endeffector_kin()
         co_reach_init = coords_list[0]
+        efkin = plan_config.efkin
+        box_const = plan_config.box_const
+        colfree_const_all = plan_config.colfree_const_all
+        colfree_const_table = plan_config.colfree_const_table
+        colfree_const_magcup = plan_config.colfree_const_magcup
 
         # check if initial pose is collision free
         # NOTE: solve unconstrained IK first. which should be solved...
