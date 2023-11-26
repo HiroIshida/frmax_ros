@@ -526,5 +526,8 @@ if __name__ == "__main__":
             x = sampler.ask()
             assert x is not None
             param, error = x[:-3], x[-3:]
+            rospy.loginfo("param: {}".format(param))
+            rospy.loginfo("error: {}".format(error))
+            traj = create_trajectory(param)
             y = executor.robust_execute(traj, hypo_error=error)
             sampler.tell(x, y)
