@@ -203,8 +203,6 @@ class Executor:
     ) -> Optional[bool]:
         assert self.msg_available()
         assert self.tf_obj_base is not None
-        rospy.loginfo("tf_obj_base: {}".format(self.tf_obj_base))
-
         path_debug_args = Path("/tmp/frmax_debug_args.pkl")
         with path_debug_args.open("wb") as f:
             pickle.dump((planer_pose_traj, hypo_error, rot, self.raw_msg), f)
@@ -338,7 +336,6 @@ class Executor:
                 rospy.logwarn("failed to plan, retrying...")
                 continue
             else:
-                rospy.loginfo("solved!")
                 break
         if q_list is None:
             rospy.logwarn("failed to plan")
@@ -385,7 +382,6 @@ class Executor:
             time.sleep(2.0)
             label = self.wait_for_label()
             self.ri.move_gripper("larm", 0.05)
-            rospy.loginfo("play back")
             self.ri.angle_vector_sequence(
                 avs_reach[::-1], times=[0.4] * len(avs_reach), time_scale=1.0
             )
@@ -457,6 +453,11 @@ if __name__ == "__main__":
         if file_path.exists():
             with Path("/tmp/frmax_debug_args.pkl").open("rb") as f:
                 planer_traj, hypo_error, rot, raw_msg = pickle.load(f)
+
+                print("planer_traj: {}".format(planer_traj))
+                print("hypo_error: {}".format(hypo_error))
+                print("rot: {}".format(rot))
+                print("raw_msg: {}".format(raw_msg))
         else:
             param = np.random.randn(21) * 0.0
             planer_traj = create_trajectory(param)
@@ -521,7 +522,8 @@ if __name__ == "__main__":
         sampler: BlackBoxSampler = DistributionGuidedSampler(
             X, Y, metric, param_init, config, situation_sampler=sample_situation
         )
-        for _ in range(1000):
+        for i in range(1000):
+            rospy.loginfo("iteration: {}".format(i))
             sampler.update_center()
             x = sampler.ask()
             assert x is not None
@@ -530,4 +532,5 @@ if __name__ == "__main__":
             rospy.loginfo("error: {}".format(error))
             traj = create_trajectory(param)
             y = executor.robust_execute(traj, hypo_error=error)
+            rospy.loginfo("label: {}".format(y))
             sampler.tell(x, y)
