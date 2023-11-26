@@ -88,6 +88,7 @@ class RobotInterfaceWrap(PR2ROSRobotInterface):
 
 class Executor:
     tf_obj_base: Optional[CoordinateTransform]
+    msg_raw: Optional[PoseStamped]
     pr2: PR2
     ri: PR2ROSRobotInterface
     is_simulation: bool
@@ -101,6 +102,7 @@ class Executor:
         self.pr2.r_shoulder_lift_joint.joint_angle(-0.5)
         self.pr2.l_shoulder_lift_joint.joint_angle(-0.5)
         self.pr2.l_wrist_roll_joint.joint_angle(0.0)
+        self.pr2.head_tilt_joint.joint_angle(+1.0)
 
         self.is_simulation = debug_pose_msg is not None
         if self.is_simulation:
@@ -108,6 +110,7 @@ class Executor:
             tf.src = "object"
             tf.dest = "base"
             self.tf_obj_base = tf
+            self.msg_raw = debug_pose_msg
         else:
             self.ri = RobotInterfaceWrap(pr2)
             self.ri.move_gripper("larm", 0.05)
@@ -117,8 +120,13 @@ class Executor:
 
             self.sub = Subscriber("/object_pose", PoseStamped, self.callback)
             self.tf_obj_base = None
+            self.msg_raw = None
 
     def callback(self, msg: PoseStamped):
+        msg_raw = copy.deepcopy(msg)
+        self.msg_raw = msg_raw
+
+        msg.pose.position.z = 0.8  # for cup
         tf = CoordinateTransform.from_ros_pose(msg.pose)
         tf.src = "object"
         tf.dest = "base"
@@ -131,6 +139,7 @@ class Executor:
         if self.is_simulation:
             return
         self.tf_obj_base = None
+        self.msg_raw = None
 
     @staticmethod
     def wait_for_label() -> Optional[bool]:
@@ -172,7 +181,10 @@ class Executor:
     ) -> Optional[bool]:
         assert self.msg_available()
         assert self.tf_obj_base is not None
+        marker_height_original = self.msg_raw.pose.position.z
         rospy.loginfo("tf_obj_base: {}".format(self.tf_obj_base))
+        rospy.loginfo("marker_height_original: {}".format(marker_height_original))
+
         if hypo_error is None:
             hypo_error = np.zeros(3)
         x_error, y_error, yaw_error = hypo_error
@@ -324,7 +336,30 @@ class Executor:
             self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
             self.ri.wait_interpolation()
             self.ri.move_gripper("larm", 0.0)
-            label = self.wait_for_label()
+            auto_label = True
+            if auto_label:
+                # move larm up a bit to check if the object is lifted
+                av_current = self.ri.potentio_vector()
+                self.pr2.angle_vector(av_current)
+                self.pr2.larm.move_end_pos([0.0, 0.0, 0.1], wrt="world")
+                self.ri.angle_vector(self.pr2.angle_vector())
+                self.ri.wait_interpolation()
+                self.reset()
+                while not executor.msg_available():
+                    time.sleep(0.1)
+                marker_height_now = self.msg_raw.pose.position.z
+                rospy.loginfo(
+                    "height_now: {}, marker_original: {}".format(
+                        marker_height_now, marker_height_original
+                    )
+                )
+                label = marker_height_now - marker_height_original > 0.03
+                # return to original pose
+                self.pr2.angle_vector(av_current)
+                self.ri.angle_vector(self.pr2.angle_vector())
+                self.ri.wait_interpolation()
+            else:
+                label = self.wait_for_label()
             self.ri.move_gripper("larm", 0.05)
             rospy.loginfo("play back")
             self.ri.angle_vector_sequence(avs[::-1], times=[0.2] * len(avs), time_scale=1.0)
@@ -363,7 +398,8 @@ def create_trajectory(param: np.ndarray, dt: float = 0.1) -> np.ndarray:
 
 if __name__ == "__main__":
     debug_pose_msg = PoseStamped()
-    debug_pose_msg.pose.position.x = 0.47641722876585824
+    # debug_pose_msg.pose.position.x = 0.47641722876585824
+    debug_pose_msg.pose.position.x = 0.57641722876585824
     debug_pose_msg.pose.position.y = -0.054688228244401484
     debug_pose_msg.pose.position.z = 0.8
     debug_pose_msg.pose.orientation.x = 0.0
@@ -374,14 +410,15 @@ if __name__ == "__main__":
     # executor = Executor(debug_pose_msg)
     executor = Executor(None)
 
-    debug: bool = False
+    debug: bool = True
     if debug:
         param = np.random.randn(21) * 0.0
         planer_traj = create_trajectory(param)
 
         # wait until the object pose is received
         rospy.loginfo("Object pose is received")
-        executor.robust_execute(planer_traj)
+        out = executor.robust_execute(planer_traj)
+        rospy.loginfo("label: {}".format(out))
     else:
 
         def sample_situation() -> np.ndarray:
