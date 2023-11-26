@@ -382,6 +382,7 @@ class Executor:
             self.ri.wait_interpolation()
 
             self.ri.move_gripper("larm", 0.0)
+            time.sleep(2.0)
             label = self.wait_for_label()
             self.ri.move_gripper("larm", 0.05)
             rospy.loginfo("play back")
