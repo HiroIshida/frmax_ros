@@ -622,6 +622,11 @@ class Executor:
 
             self.ri.move_gripper("larm", 0.0)
             time.sleep(2.0)
+            self.pr2.larm.move_end_pos(
+                [-0.02, 0.0, 0.0], wrt="local"
+            )  # move back bit to ensure robustness
+            self.ri.angle_vector(self.pr2.angle_vector(), time_scale=1.0, time=1.0)
+            self.ri.wait_interpolation()
             label = self.wait_for_label()
             self.ri.move_gripper("larm", 0.05)
             self.ri.angle_vector_sequence(
