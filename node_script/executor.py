@@ -279,6 +279,23 @@ class Executor:
                 lib.append(np.array(out))
         return lib
 
+    def wait_until_ready(self) -> None:
+        timeout = 10.0
+        ts = time.time()
+        while not self.msg_available():
+            time.sleep(0.1)
+            if time.time() - ts > timeout:
+                rospy.logwarn("timeout in wait_until_ready")
+                self.sound_client.say(
+                    "Could not find object for {} seconds".format(timeout), local=True
+                )
+                self.sound_client.say("Please input y after fixing the environment", local=True)
+                while True:
+                    user_input = input("push y after fixing the environment")
+                    if user_input.lower() == "y":
+                        break
+                ts = time.time()
+
     def recover(
         self,
         xy_desired: Optional[np.ndarray] = None,
@@ -301,8 +318,7 @@ class Executor:
             co_grasp.translate([0.063, 0.0, 0.0])
             return co_pregrasp, co_grasp
 
-        while not executor.msg_available():
-            time.sleep(0.1)
+        self.wait_until_ready()
         co_obj = self.tf_obj_base.to_skrobot_coords()
         co_pregrasp, co_grasp = create_pregrasp_and_grasp_poses(co_obj)
 
@@ -444,8 +460,7 @@ class Executor:
     ) -> bool:
         time.time()
         while True:
-            while not executor.msg_available():
-                time.sleep(0.1)
+            self.wait_until_ready()
             y = self.execute(planer_pose_traj, hypo_error=hypo_error)
             self.reset()
             if y is not None:
