@@ -67,6 +67,11 @@ def suppress_output(stream_name):
             _redirect_stream(to=old_stream)  # Restore the original stream
 
 
+class SoundClientWrap(SoundClient):
+    def say(self, message: str, blocking: bool = False):
+        super().say(message, volume=0.3, blocking=blocking)
+
+
 class RobotInterfaceWrap(PR2ROSRobotInterface):
     def __init__(self, pr2: PR2):
         super().__init__(pr2)
@@ -159,7 +164,7 @@ class Executor:
     is_simulation: bool
     q_home: np.ndarray
     auto_annotation: bool
-    sound_client: SoundClient
+    sound_client: SoundClientWrap
 
     def __init__(self, debug_pose_msg: Optional[PoseStamped], auto_annotation: bool = False):
         pr2 = PR2(use_tight_joint_limit=False)
@@ -185,7 +190,7 @@ class Executor:
             self.tf_obj_base = tf
             self.raw_msg = debug_pose_msg
         else:
-            self.sound_client = SoundClient()
+            self.sound_client = SoundClientWrap()
             self.ri = RobotInterfaceWrap(pr2)
             self.ri.move_gripper("larm", 0.05)
             self.ri.move_gripper("rarm", 0.03)
