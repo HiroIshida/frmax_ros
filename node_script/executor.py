@@ -416,7 +416,9 @@ class Executor:
         planer_pose_traj: List[np.ndarray],
         hypo_error: Optional[np.ndarray] = None,
         rot: float = -np.pi * 0.5,
+        manual_recovery: bool = False,
     ) -> bool:
+        time.time()
         while True:
             while not executor.msg_available():
                 time.sleep(0.1)
@@ -424,12 +426,23 @@ class Executor:
             self.reset()
             if y is not None:
                 return y
-            self.sound_client.say("plan failed. Please put obejct in different pose")
-            rospy.logwarn("error: {}".format(hypo_error))
-            while True:
-                user_input = input("push y to retry")
-                if user_input.lower() == "y":
-                    break
+            rospy.logwarn("failed to plan")
+            if manual_recovery:
+                self.sound_client.say("plan failed. Please put obejct in different pose")
+                rospy.logdebug("error: {}".format(hypo_error))
+                while True:
+                    user_input = input("push y to retry")
+                    if user_input.lower() == "y":
+                        break
+            else:
+                rospy.loginfo("auto recovery")
+                while True:
+                    recovery_success = self.recover()
+                    if recovery_success:
+                        rospy.loginfo("recovery success")
+                        break
+                    else:
+                        rospy.logwarn("recovery failed")
         assert False
 
     def execute(
@@ -724,8 +737,8 @@ if __name__ == "__main__":
         n_init_sample = 5
         X, Y = [], []
         executor = Executor(None, auto_annotation=True)
-        executor.recover(yaw_desired=-1.74)
-        assert False
+        # executor.recover()
+        # assert False
 
         # param init is assumed to be success with zero error
         X.append(np.hstack([param_init, np.zeros(3)]))
