@@ -368,6 +368,9 @@ class Executor:
                 q_list_place = [q_pregrasp] + q_pregrasp_to_q_predesired + [q_desired]
 
                 self.sound_client.say("plan to recovery success. Robot will move.")
+                rospy.logdebug(
+                    "(recover) successfully planned recovery trajectory. start moving to grasp position"
+                )
                 avs = get_avs(q_list_reach)
                 times = [0.6] * (len(avs) - 2) + [1.0, 2.0]
                 self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
@@ -376,9 +379,9 @@ class Executor:
                 self.ri.wait_interpolation()
                 time.sleep(2.0)
                 gripper_pos = self.ri.gripper_states["rarm"].process_value
-                rospy.loginfo("gripper_pos: {}".format(gripper_pos))
+                rospy.logdebug("(recover) gripper_pos: {}".format(gripper_pos))
                 if gripper_pos < 0.002:
-                    rospy.logwarn("failed to grasp")
+                    rospy.logwarn("(recover) failed to grasp")
                     self.sound_client.say("failed to grasp. return to home position")
                     self.ri.move_gripper("rarm", 0.03)
                     self.ri.wait_interpolation()
@@ -389,19 +392,20 @@ class Executor:
                     self.ri.wait_interpolation()
                     return False
 
+                rospy.logdebug("(recover) start placing")
                 avs = get_avs(q_list_place)
                 times = [0.6] * (len(avs) - 2) + [1.0, 2.0]
                 self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
                 self.ri.wait_interpolation()
                 self.ri.move_gripper("rarm", 0.03)
 
-                # back to home position
+                rospy.logdebug("(recover) start going back to home position")
                 q_list_back = [q_predesired, q_pregrasp] + q_init_to_q_pregrasp[::-1]
                 avs = get_avs(q_list_back)
                 times = [0.6] * len(avs)
                 self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
                 self.ri.wait_interpolation()
-
+                rospy.logdebug("recovered procedure finished")
                 return True
             except _PlanningFailure:
                 continue
@@ -551,7 +555,7 @@ class Executor:
         for _ in range(5):
             q_list = whole_plan(n_resample)
             if q_list is None:
-                rospy.logwarn("failed to plan, retrying...")
+                rospy.logdebug("failed to plan, retrying...")
                 continue
             else:
                 break
@@ -559,6 +563,7 @@ class Executor:
             rospy.logwarn("failed to plan")
             self.sound_client.say("failed to plan. Please change the object pose.")
             return None
+        rospy.logdebug("successfully planned reaching + grasping trajectory")
 
         if self.is_simulation:
             viewer = TrimeshSceneViewer()
@@ -591,11 +596,13 @@ class Executor:
             times_reach = [0.4 for _ in range(n_resample)]
             times_grasp = [0.5 for _ in range(len(planer_pose_traj) - 1)]
             avs_reach, avs_grasp = avs[:n_resample], avs[n_resample:]
-            self.sound_client.say("reaching")
+            rospy.logdebug("start reacing")
+            self.sound_client.say("reaching phase")
             self.ri.angle_vector_sequence(avs_reach, times=times_reach, time_scale=1.0)
             self.ri.wait_interpolation()
 
-            self.sound_client.say("contact motion")
+            rospy.logdebug("start grasping phase")
+            self.sound_client.say("grasping phase")
             time.sleep(1.5)
             self.ri.angle_vector_sequence(avs_grasp, times=times_grasp, time_scale=1.0)
             self.ri.wait_interpolation()
@@ -730,6 +737,7 @@ if __name__ == "__main__":
             X.append(np.hstack([param_init, error]))
             Y.append(is_success)
         rospy.loginfo("Y: {}".format(Y))
+        executor.sound_client.say("all initial samples are collected")
 
         X = np.array(X)
         Y = np.array(Y)
@@ -750,7 +758,9 @@ if __name__ == "__main__":
         sampler: BlackBoxSampler = DistributionGuidedSampler(
             X, Y, metric, param_init, config, situation_sampler=sample_situation
         )
-        for i in range(1000):
+        for i in range(100):
+            executor.sound_client.say("episode number {}".format(i))
+            time.sleep(0.5)
             rospy.loginfo("iteration: {}".format(i))
             sampler.update_center()
             x = sampler.ask()
