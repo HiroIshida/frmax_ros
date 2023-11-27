@@ -80,6 +80,10 @@ class SoundClientWrap(SoundClient):
 
 
 class RobotInterfaceWrap(PR2ROSRobotInterface):
+    """A safer version of PR2ROSRobotInterface"""
+
+    pr2: PR2
+
     def __init__(self, pr2: PR2):
         super().__init__(pr2)
         # offset_map = {
@@ -92,19 +96,28 @@ class RobotInterfaceWrap(PR2ROSRobotInterface):
         }
         self.offset_indices = [pr2.joint_names.index(name) for name in offset_map.keys()]
         self.offset_values = np.array(list(offset_map.values()))
+        self.pr2 = pr2
 
     def angle_vector(self, av: Optional[np.ndarray] = None, **kwargs):
+        rospy.logdebug("angle_vector: {}".format(av))
         if av is None:
             return super().angle_vector()
         if np.any(np.isinf(av)) or np.any(np.isnan(av)):
             raise ValueError("angle vector contains inf or nan")
+
+        # reflect
+        self.pr2.angle_vector(av)
 
         av = av.copy()
         av[self.offset_indices] += self.offset_values
         super().angle_vector(av, **kwargs)
 
     def angle_vector_sequence(self, avs, **kwargs):
+        # reflect
+        self.pr2.angle_vector(avs[-1])
         avs = [av.copy() for av in avs]
+        rospy.logdebug("avs[0]: {}".format(avs[0]))
+        rospy.logdebug("avs[-1]: {}".format(avs[-1]))
         for av in avs:
             av[self.offset_indices] += self.offset_values
             if np.any(np.isinf(av)) or np.any(np.isnan(av)):
