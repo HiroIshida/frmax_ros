@@ -250,7 +250,12 @@ class Executor:
                 lib.append(np.array(out))
         return lib
 
-    def recover(self, obj_displacement: Optional[np.ndarray] = None) -> Optional[bool]:
+    def recover(
+        self,
+        xy_desired: Optional[np.ndarray] = None,
+        yaw_desired: Optional[float] = None,
+    ) -> Optional[bool]:
+        assert yaw_desired is None or (-np.pi < yaw_desired < 0.0)
 
         if self.is_simulation:
             return
@@ -272,19 +277,18 @@ class Executor:
         co_obj = self.tf_obj_base.to_skrobot_coords()
         co_pregrasp, co_grasp = create_pregrasp_and_grasp_poses(co_obj)
 
-        if obj_displacement is None:
-            # move to default pose
-            desired_pos_xy = np.array([0.45, 0.0])
-            diff_pos_xy = desired_pos_xy - co_obj.worldpos()[:2]
-            disired_yaw = -np.pi * 0.5
-            yaw_now = rpy_angle(co_obj.worldrot())[0][0]
-            diff_yaw = disired_yaw - yaw_now
-            obj_displacement = np.array([diff_pos_xy[0], diff_pos_xy[1], diff_yaw])
-        assert np.any(np.abs(obj_displacement) > 0.1)
+        if xy_desired is None:
+            xy_desired = np.array([0.45, 0.0])  # default
+        xy_displacement = xy_desired - co_obj.worldpos()[:2]
+        if yaw_desired is None:
+            yaw_desired = -np.pi * 0.5
+        yaw_now = rpy_angle(co_obj.worldrot())[0][0]  # default
+        yaw_displacement = yaw_desired - yaw_now
+        assert not (np.abs(yaw_displacement) < 0.1 and np.linalg.norm(xy_displacement) < 0.1)
 
         co_obj_desired = co_obj.copy_worldcoords()
-        co_obj_desired.translate([obj_displacement[0], obj_displacement[1], 0.0], wrt="world")
-        co_obj_desired.rotate(obj_displacement[2], "z")
+        co_obj_desired.translate([xy_displacement[0], xy_displacement[1], 0.0], wrt="world")
+        co_obj_desired.rotate(yaw_displacement, "z")
         co_predesired, co_desired = create_pregrasp_and_grasp_poses(co_obj_desired)
 
         plan_config = PlanningCongig(
@@ -684,7 +688,7 @@ if __name__ == "__main__":
         n_init_sample = 5
         X, Y = [], []
         executor = Executor(None, auto_annotation=True)
-        executor.recover()
+        executor.recover(yaw_desired=-1.54)
         assert False
 
         # param init is assumed to be success with zero error
