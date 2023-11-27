@@ -183,6 +183,7 @@ class Executor:
     ri: PR2ROSRobotInterface
     is_simulation: bool
     q_home: np.ndarray
+    av_home: np.ndarray
     auto_annotation: bool
     sound_client: SoundClientWrap
 
@@ -411,6 +412,10 @@ class Executor:
                 rospy.logdebug(
                     "(recover) successfully planned recovery trajectory. start moving to grasp position"
                 )
+
+                # FIXME: move back to home position (it already supposed to be at home position but sometimes not)
+                self.ri.angle_vector(self.av_home, time_scale=1.0, time=5.0)
+
                 avs = get_avs(q_list_reach)
                 times = [0.6] * (len(avs) - 2) + [1.0, 2.0]
                 self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
