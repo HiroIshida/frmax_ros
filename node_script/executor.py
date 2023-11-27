@@ -254,7 +254,7 @@ class Executor:
         self,
         xy_desired: Optional[np.ndarray] = None,
         yaw_desired: Optional[float] = None,
-    ) -> Optional[bool]:
+    ) -> bool:
         assert yaw_desired is None or (-np.pi < yaw_desired < 0.0)
 
         if self.is_simulation:
@@ -264,7 +264,7 @@ class Executor:
         def create_pregrasp_and_grasp_poses(co_obj):
             co_pregrasp = co_obj.copy_worldcoords()
             co_pregrasp.translate([0.05, 0.0, 0.0])
-            co_pregrasp.translate([0.0, 0.0, +0.08])
+            co_pregrasp.translate([0.0, 0.0, 0.077])
             co_pregrasp.rotate(+np.pi * 0.5, "y")
             co_pregrasp.rotate(-np.pi * 0.5, "x")
 
@@ -326,6 +326,13 @@ class Executor:
             q_list = list(res.traj.resample(n_wp).numpy())
             return q_list
 
+        def get_avs(q_list: List[np.ndarray]) -> List[np.ndarray]:
+            avs = []
+            for q in q_list:
+                set_robot_state(self.pr2, plan_config.joint_names, q)
+                avs.append(self.pr2.angle_vector())
+            return avs
+
         for q_seed_lib in self.recovery_ik_lib():
 
             try:
@@ -354,25 +361,40 @@ class Executor:
                 q_list_place = [q_pregrasp] + q_pregrasp_to_q_predesired + [q_desired]
 
                 self.sound_client.say("plan to recovery success. Robot will move.")
-                avs = []
-                for q in q_list_reach:
-                    set_robot_state(self.pr2, plan_config.joint_names, q)
-                    avs.append(self.pr2.angle_vector())
-
+                avs = get_avs(q_list_reach)
                 times = [0.6] * (len(avs) - 2) + [1.0, 2.0]
                 self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
                 self.ri.wait_interpolation()
                 self.ri.move_gripper("rarm", 0.0)
+                self.ri.wait_interpolation()
+                time.sleep(2.0)
+                gripper_pos = self.ri.gripper_states["rarm"].process_value
+                rospy.loginfo("gripper_pos: {}".format(gripper_pos))
+                if gripper_pos < 0.002:
+                    rospy.logwarn("failed to grasp")
+                    self.sound_client.say("failed to grasp. return to home position")
+                    self.ri.move_gripper("rarm", 0.03)
+                    self.ri.wait_interpolation()
+                    q_list_back = [q_pregrasp] + q_init_to_q_pregrasp[::-1]
+                    avs = get_avs(q_list_back)
+                    times = [0.6] * len(avs)
+                    self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
+                    self.ri.wait_interpolation()
+                    return False
 
-                avs = []
-                for q in q_list_place:
-                    set_robot_state(self.pr2, plan_config.joint_names, q)
-                    avs.append(self.pr2.angle_vector())
-
+                avs = get_avs(q_list_place)
                 times = [0.6] * (len(avs) - 2) + [1.0, 2.0]
                 self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
                 self.ri.wait_interpolation()
                 self.ri.move_gripper("rarm", 0.03)
+
+                # back to home position
+                q_list_back = [q_predesired, q_pregrasp] + q_init_to_q_pregrasp[::-1]
+                avs = get_avs(q_list_back)
+                times = [0.6] * len(avs)
+                self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
+                self.ri.wait_interpolation()
+
                 return True
             except _PlanningFailure:
                 continue
@@ -688,7 +710,7 @@ if __name__ == "__main__":
         n_init_sample = 5
         X, Y = [], []
         executor = Executor(None, auto_annotation=True)
-        executor.recover(yaw_desired=-1.54)
+        executor.recover(yaw_desired=-1.74)
         assert False
 
         # param init is assumed to be success with zero error
