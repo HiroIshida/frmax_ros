@@ -2,6 +2,7 @@ import argparse
 import copy
 import os
 import pickle
+import subprocess
 import sys
 import time
 from contextlib import contextmanager
@@ -68,7 +69,13 @@ def suppress_output(stream_name):
 
 
 class SoundClientWrap(SoundClient):
-    def say(self, message: str, blocking: bool = False):
+    def __init__(self, always_local: bool = False):
+        super().__init__()
+        self.always_local = always_local
+
+    def say(self, message: str, blocking: bool = False, local: bool = False):
+        if local or self.always_local:
+            subprocess.call('echo "{}" | festival --tts'.format(message), shell=True)
         super().say(message, volume=0.3, blocking=blocking)
 
 
