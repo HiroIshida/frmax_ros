@@ -78,7 +78,7 @@ class AprilPosePublisher:
             std = self.queue.get_std()
             xyz_std = std[:3]
             theta_std = std[3]
-            if np.any(xyz_std > 0.1) or theta_std > 0.1:
+            if np.any(xyz_std > 0.005) or theta_std > 0.03:
                 rospy.loginfo("TF is too noisy")
                 return
 
