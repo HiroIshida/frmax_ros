@@ -289,7 +289,9 @@ class Executor:
             yaw_desired = -np.pi * 0.5
         yaw_now = rpy_angle(co_obj.worldrot())[0][0]  # default
         yaw_displacement = yaw_desired - yaw_now
-        assert not (np.abs(yaw_displacement) < 0.1 and np.linalg.norm(xy_displacement) < 0.1)
+        if np.abs(yaw_displacement) < 0.1 and np.linalg.norm(xy_displacement) < 0.1:
+            rospy.logdebug("no need to recover")
+            return True
 
         co_obj_desired = co_obj.copy_worldcoords()
         co_obj_desired.translate([xy_displacement[0], xy_displacement[1], 0.0], wrt="world")
