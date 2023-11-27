@@ -239,15 +239,7 @@ class Executor:
         self.tf_obj_base = None
 
     def wait_for_label(self) -> Optional[bool]:
-        if self.auto_annotation:
-            gripper_pos = self.ri.gripper_states["larm"].process_value
-            if gripper_pos > 0.0035:
-                return True
-            elif gripper_pos < 0.002:
-                return False
-            else:
-                assert False
-        else:
+        def get_humann_annotation() -> Optional[bool]:
             while True:
                 user_input = input("Add label: Enter 'y' for True or 'n' for False, r for retry")
                 if user_input.lower() == "y":
@@ -256,6 +248,18 @@ class Executor:
                     return False
                 elif user_input.lower() == "r":
                     return None
+
+        if self.auto_annotation:
+            gripper_pos = self.ri.gripper_states["larm"].process_value
+            if gripper_pos > 0.004:
+                return True
+            elif gripper_pos < 0.002:
+                return False
+            else:
+                self.sound_client.say("uncertain. please label manually", local=True)
+                get_humann_annotation()
+        else:
+            return get_humann_annotation()
 
     @lru_cache(maxsize=1)
     def recovery_ik_lib(self) -> List[np.ndarray]:
