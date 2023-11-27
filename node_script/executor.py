@@ -191,16 +191,17 @@ class Executor:
         pr2 = PR2(use_tight_joint_limit=False)
         pr2.reset_manip_pose()
         self.pr2 = pr2
-        self.pr2.r_shoulder_pan_joint.joint_angle(-2.1)
-        self.pr2.l_shoulder_pan_joint.joint_angle(2.1)
+        self.pr2.r_shoulder_pan_joint.joint_angle(-1.1)
+        self.pr2.l_shoulder_pan_joint.joint_angle(1.1)
         self.pr2.r_shoulder_lift_joint.joint_angle(-0.5)
         self.pr2.l_shoulder_lift_joint.joint_angle(-0.5)
         self.pr2.l_wrist_roll_joint.joint_angle(0.0)
-        self.pr2.head_tilt_joint.joint_angle(+1.0)
+        self.pr2.head_tilt_joint.joint_angle(+1.2)
         pr2_plan_conf = PR2Config(control_arm="larm")
         joint_names = pr2_plan_conf._get_control_joint_names()
         self.q_home = get_robot_state(self.pr2, joint_names)
         self.auto_annotation = auto_annotation
+        self.av_home = self.pr2.angle_vector()
 
         self.is_simulation = debug_pose_msg is not None
         print("is_simulation: {}".format(self.is_simulation))
@@ -324,7 +325,7 @@ class Executor:
         co_pregrasp, co_grasp = create_pregrasp_and_grasp_poses(co_obj)
 
         if xy_desired is None:
-            xy_desired = np.array([0.45, 0.0])  # default
+            xy_desired = np.array([0.5, 0.0])  # default
         xy_displacement = xy_desired - co_obj.worldpos()[:2]
         if yaw_desired is None:
             yaw_desired = -np.pi * 0.5
@@ -803,9 +804,8 @@ if __name__ == "__main__":
 
         X = np.array(X)
         Y = np.array(Y)
-        ls_param = np.ones(21)
-        # ls_err = np.array([0.01, 0.01, np.deg2rad(5.0)])
-        ls_err = np.array([0.01, 0.01, np.deg2rad(1.0)])
+        ls_param = np.ones(21) * 3
+        ls_err = np.array([0.005, 0.005, np.deg2rad(5.0)])
         metric = CompositeMetric.from_ls_list([ls_param, ls_err])
 
         config = DGSamplerConfig(
