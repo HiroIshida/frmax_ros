@@ -221,7 +221,7 @@ class Executor:
     def wait_for_label(self) -> Optional[bool]:
         if self.auto_annotation:
             gripper_pos = self.ri.gripper_states["larm"].process_value
-            if gripper_pos > 0.005:
+            if gripper_pos > 0.0035:
                 return True
             elif gripper_pos < 0.002:
                 return False
@@ -269,7 +269,7 @@ class Executor:
         def create_pregrasp_and_grasp_poses(co_obj):
             co_pregrasp = co_obj.copy_worldcoords()
             co_pregrasp.translate([0.05, 0.0, 0.0])
-            co_pregrasp.translate([0.0, 0.0, 0.077])
+            co_pregrasp.translate([0.0, 0.0, 0.074])
             co_pregrasp.rotate(+np.pi * 0.5, "y")
             co_pregrasp.rotate(-np.pi * 0.5, "x")
 
