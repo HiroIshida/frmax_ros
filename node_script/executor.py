@@ -76,6 +76,7 @@ class SoundClientWrap(SoundClient):
     def say(self, message: str, blocking: bool = False, local: bool = False):
         if local or self.always_local:
             subprocess.call('echo "{}" | festival --tts'.format(message), shell=True)
+        rospy.logdebug("sound client: {}".format(message))
         super().say(message, volume=0.3, blocking=blocking)
 
 
@@ -212,17 +213,20 @@ class Executor:
             self.tf_obj_base = tf
             self.raw_msg = debug_pose_msg
         else:
-            self.sound_client = SoundClientWrap()
+            self.sound_client = SoundClientWrap(always_local=True)
             self.ri = RobotInterfaceWrap(pr2)
             self.ri.move_gripper("larm", 0.05)
             self.ri.move_gripper("rarm", 0.03)
             self.ri.angle_vector(self.pr2.angle_vector())
             self.ri.wait_interpolation()
             time.sleep(2.0)
+            rospy.logdebug("q_home: {}".format(self.q_home))
+            rospy.logdebug("av_home: {}".format(self.av_home))
 
             self.pub = Publisher("/debug_trajectory", RosPath, queue_size=1, latch=True)
             self.sub = Subscriber("/object_pose", PoseStamped, self.callback)
             self.tf_obj_base = None
+            self.sound_client.say("ready to start", local=True)
 
     def callback(self, msg: PoseStamped):
         self.raw_msg = copy.deepcopy(msg)
@@ -259,6 +263,7 @@ class Executor:
                 return False
             else:
                 self.sound_client.say("uncertain. please label manually", local=True)
+                self.sound_client.say("aaaaaaaaaaaaaaaaaaaaaaaaa", local=True)
                 get_humann_annotation()
         else:
             return get_humann_annotation()
@@ -292,6 +297,7 @@ class Executor:
                     "Could not find object for {} seconds".format(timeout), local=True
                 )
                 self.sound_client.say("Please input y after fixing the environment", local=True)
+                self.sound_client.say("aaaaaaaaaaaaaaaaaaaaaaaaa", local=True)
                 while True:
                     user_input = input("push y after fixing the environment")
                     if user_input.lower() == "y":
@@ -637,7 +643,6 @@ class Executor:
                 break
         if q_list is None:
             rospy.logwarn("failed to plan")
-            self.sound_client.say("failed to plan. Please change the object pose.")
             return None
         rospy.logdebug("successfully planned reaching + grasping trajectory")
 
