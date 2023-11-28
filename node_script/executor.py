@@ -10,7 +10,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import dill
 import numpy as np
+import rospkg
 import rospy
 from frmax2.core import (
     BlackBoxSampler,
@@ -758,16 +760,27 @@ def create_trajectory(param: np.ndarray, dt: float = 0.1) -> np.ndarray:
     return planer_traj
 
 
+def is_valid_param(param: np.ndarray) -> bool:
+    traj = create_trajectory(param)
+    if np.any(np.abs(traj[:, 2]) > np.deg2rad(45.0)):
+        return False
+    if np.abs(traj[-1, 0] - traj[0, 0]) > 0.1:
+        return False
+    return True
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--reproduce", action="store_true", help="reprodice the debug arg")
+    parser.add_argument("--episode", type=int, default=-1, help="episode number to load")
+
     args = parser.parse_args()
 
     if args.reproduce:
-        file_path = Path("/tmp/frmax_debug_args.pkl")
-        if file_path.exists():
+        cache_file_path = Path("/tmp/frmax_debug_args.pkl")
+        if cache_file_path.exists():
             with Path("/tmp/frmax_debug_args.pkl").open("rb") as f:
                 planer_traj, hypo_error, rot, raw_msg = pickle.load(f)
 
@@ -802,56 +815,95 @@ if __name__ == "__main__":
             yaw = np.random.uniform(-np.pi * 0.1, np.pi * 0.1)
             return np.array([x, y, yaw])
 
-        param_init = np.zeros(21)
-        traj = create_trajectory(param_init)
         # create initial dataset
-        n_init_sample = 5
-        X, Y = [], []
         executor = Executor(None, auto_annotation=True)
-        executor.robust_execute(traj)
-        # assert False
 
-        # param init is assumed to be success with zero error
-        X.append(np.hstack([param_init, np.zeros(3)]))
-        Y.append(True)
+        rospack = rospkg.RosPack()
+        pkg_path = rospack.get_path("frmax_ros")
+        data_path = Path(pkg_path) / "data"
+        assert data_path.exists()
 
-        for _ in range(n_init_sample):
-            error = sample_situation()
-            is_success = executor.robust_execute(traj, hypo_error=error)
-            X.append(np.hstack([param_init, error]))
-            Y.append(is_success)
-        rospy.loginfo("Y: {}".format(Y))
-        executor.sound_client.say("all initial samples are collected")
+        sampler: Optional[BlackBoxSampler] = None
+        if args.episode >= 0:
+            i_episode_offset = args.episode + 1
+            cache_file_path = data_path / "sampler_cache-{}.pkl".format(args.episode)
+            assert cache_file_path.exists()
+            if cache_file_path.exists():
+                with cache_file_path.open("rb") as f:
+                    sampler = dill.load(f)
+        else:
+            i_episode_offset = 0
+            if len(list(data_path.iterdir())) > 0:
+                rospy.loginfo("cache file exists")
+                # wait for user input to continue
+                while True:
+                    user_input = input("push y to remove all cache files and proceed")
+                    if user_input.lower() == "y":
+                        break
+                for p in data_path.iterdir():
+                    p.unlink()
 
-        X = np.array(X)
-        Y = np.array(Y)
-        ls_param = np.ones(21) * 3
-        ls_err = np.array([0.005, 0.005, np.deg2rad(5.0)])
-        metric = CompositeMetric.from_ls_list([ls_param, ls_err])
+            param_init = np.zeros(21)
+            # param init is assumed to be success with zero error
+            n_init_sample = 5
+            X, Y = [], []
+            X.append(np.hstack([param_init, np.zeros(3)]))
+            Y.append(True)
 
-        config = DGSamplerConfig(
-            param_ls_reduction_rate=0.999,
-            n_mc_param_search=30,
-            c_svm=10000,
-            integration_method="mc",
-            n_mc_integral=1000,
-            r_exploration=0.5,
-            learning_rate=1.0,
-        )
-        sampler: BlackBoxSampler = DistributionGuidedSampler(
-            X, Y, metric, param_init, config, situation_sampler=sample_situation
-        )
+            assert is_valid_param(param_init)
+            traj = create_trajectory(param_init)
+            executor.robust_execute(traj)  # this is supposed to be success
+
+            for _ in range(n_init_sample):
+                error = sample_situation()
+                is_success = executor.robust_execute(traj, hypo_error=error)
+                X.append(np.hstack([param_init, error]))
+                Y.append(is_success)
+            rospy.loginfo("Y: {}".format(Y))
+            executor.sound_client.say("all initial samples are collected")
+
+            X = np.array(X)
+            Y = np.array(Y)
+            ls_param = np.ones(21) * 3
+            ls_err = np.array([0.005, 0.005, np.deg2rad(5.0)])
+            metric = CompositeMetric.from_ls_list([ls_param, ls_err])
+
+            config = DGSamplerConfig(
+                param_ls_reduction_rate=0.999,
+                n_mc_param_search=30,
+                c_svm=10000,
+                integration_method="mc",
+                n_mc_integral=1000,
+                r_exploration=0.5,
+                learning_rate=1.0,
+            )
+            sampler = DistributionGuidedSampler(
+                X,
+                Y,
+                metric,
+                param_init,
+                config,
+                situation_sampler=sample_situation,
+                is_valid_param=is_valid_param,
+            )
+        assert sampler is not None
+
         for i in range(100):
-            executor.sound_client.say("episode number {}".format(i))
+            i_episode = i + i_episode_offset
+            executor.sound_client.say("episode number {}".format(i_episode))
+            rospy.loginfo("iteration: {}".format(i_episode))
             time.sleep(0.5)
-            rospy.loginfo("iteration: {}".format(i))
             sampler.update_center()
             x = sampler.ask()
             assert x is not None
             param, error = x[:-3], x[-3:]
+            assert is_valid_param(param)
             rospy.loginfo("param: {}".format(param))
             rospy.loginfo("error: {}".format(error))
             traj = create_trajectory(param)
             y = executor.robust_execute(traj, hypo_error=error)
             rospy.loginfo("label: {}".format(y))
             sampler.tell(x, y)
+            cache_file_path = data_path / "sampler_cache-{}.pkl".format(i_episode)
+            with cache_file_path.open("wb") as f:
+                dill.dump(sampler, f)
