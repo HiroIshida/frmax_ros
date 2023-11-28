@@ -1,9 +1,19 @@
 <launch>
   <node pkg="apriltag_ros" type="apriltag_ros_continuous_node" name="apriltag_pose_detector">
-    <remap from="image_rect" to="/kinect_head/rgb/image_rect_color" />
-    <remap from="camera_info" to="/kinect_head/rgb/camera_info" />
+    <remap from="image_rect" to="/remote/kinect_head/rgb/image_rect_color" />
+    <remap from="camera_info" to="/remote/kinect_head/rgb/camera_info" />
     <rosparam command="load" file="$(find frmax_ros)/config/setting.yaml" />
     <rosparam command="load" file="$(find frmax_ros)/config/tags.yaml" />
   </node>
-  <node pkg="frmax_ros" type="april_pose_publisher.py" name="april_pose_publisher" output="screen" />
+
+  <node name="decompresser"
+       pkg="image_transport" type="republish"
+       args="compressed raw"
+       output="screen" respawn="true">
+    <remap from="in" to="/kinect_head/rgb/image_rect_color"/>
+    <remap from="out" to="/remote/kinect_head/rgb/image_rect_color"/>
+  </node>
+
+  <node pkg="frmax_ros" type="april_pose_publisher.py" name="april_pose_publisher" output="screen"/>
+  <node pkg="frmax_ros" type="dummy_camera_info_publisher.py" name="camera_info_publisher" />
 </launch>
