@@ -58,9 +58,25 @@ class AprilPosePublisher:
     queue: AverageQueue
 
     def __init__(self):
-        self.pub = rospy.Publisher("object_pose", PoseStamped, queue_size=10)
+        self.pub_filtered = rospy.Publisher("object_pose_filtered", PoseStamped, queue_size=10)
+        # self.pub = rospy.Publisher("object_pose", PoseStamped, queue_size=10)
         self.listener = tf.TransformListener()
         self.queue = AverageQueue(max_size=10)
+
+    @staticmethod
+    def xyztheta_to_pose(xyztheta: np.ndarray, target_frame: str) -> PoseStamped:
+        pose = PoseStamped()
+        pose.header.frame_id = target_frame
+        pose.header.stamp = rospy.Time.now()
+        pose.pose.position.x = xyztheta[0]
+        pose.pose.position.y = xyztheta[1]
+        pose.pose.position.z = xyztheta[2]
+        rot = wxyz2xyzw(rpy2quaternion([xyztheta[3], 0, 0]))
+        pose.pose.orientation.x = rot[0]
+        pose.pose.orientation.y = rot[1]
+        pose.pose.orientation.z = rot[2]
+        pose.pose.orientation.w = rot[3]
+        return pose
 
     def publish_pose(self):
         try:
@@ -88,20 +104,9 @@ class AprilPosePublisher:
                 rospy.loginfo("TF is too noisy")
                 return
 
-            xyztheta_mean = self.queue.get_average()
-            pose = PoseStamped()
-            pose.header.frame_id = target_frame
-            pose.header.stamp = rospy.Time.now()
-            pose.pose.position.x = xyztheta_mean[0]
-            pose.pose.position.y = xyztheta_mean[1]
-            pose.pose.position.z = xyztheta_mean[2]
-            rot = wxyz2xyzw(rpy2quaternion([xyztheta_mean[3], 0, 0]))
-            pose.pose.orientation.x = rot[0]
-            pose.pose.orientation.y = rot[1]
-            pose.pose.orientation.z = rot[2]
-            pose.pose.orientation.w = rot[3]
-            self.pub.publish(pose)
-            rospy.loginfo("Published pose: {}".format(pose))
+            pose_filtered = self.xyztheta_to_pose(xyztheta, target_frame)
+            self.pub_filtered.publish(pose_filtered)
+            rospy.loginfo("Published pose: {}".format(pose_filtered))
 
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             rospy.loginfo("TF Exception")
