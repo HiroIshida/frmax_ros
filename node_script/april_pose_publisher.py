@@ -59,7 +59,7 @@ class AprilPosePublisher:
 
     def __init__(self):
         self.pub_filtered = rospy.Publisher("object_pose_filtered", PoseStamped, queue_size=10)
-        # self.pub = rospy.Publisher("object_pose", PoseStamped, queue_size=10)
+        self.pub = rospy.Publisher("object_pose", PoseStamped, queue_size=10)
         self.listener = tf.TransformListener()
         self.queue = AverageQueue(max_size=10)
 
@@ -89,6 +89,9 @@ class AprilPosePublisher:
             xyztheta = np.hstack([trans, ypr[0]])
             self.queue.enqueue((xyztheta, rospy.Time.now()))
 
+            pose = self.xyztheta_to_pose(xyztheta, target_frame)
+            self.pub.publish(pose)
+
             if self.queue.duration() > 2.0:
                 rospy.loginfo("TF is too old")
                 return
@@ -106,7 +109,7 @@ class AprilPosePublisher:
 
             pose_filtered = self.xyztheta_to_pose(xyztheta, target_frame)
             self.pub_filtered.publish(pose_filtered)
-            rospy.loginfo("Published pose: {}".format(pose_filtered))
+            rospy.loginfo("Published pose_filtered: {}".format(pose_filtered))
 
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             rospy.loginfo("TF Exception")
