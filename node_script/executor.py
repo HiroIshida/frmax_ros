@@ -462,18 +462,34 @@ class Executor:
         planer_pose_traj: List[np.ndarray],
         hypo_error: Optional[np.ndarray] = None,
         rot: float = -np.pi * 0.5,
-        manual_recovery: bool = False,
     ) -> bool:
         time.time()
+
+        xy_desired_nominal = np.array([0.5, 0.0])
+        yaw_desired_nominal = -np.pi * 0.5
+
+        xy_desired_trial_list = [xy_desired_nominal]
+        yaw_desired_trial_list = [yaw_desired_nominal]
+        n_recovery_budget = 5
+
+        for i in range(n_recovery_budget):
+            xy_desired_trial = xy_desired_nominal + np.random.uniform(-0.06, 0.06, 2)
+            yaw_desired_trial = yaw_desired_nominal + np.random.uniform(-np.pi * 0.2, -np.pi * 0.2)
+            xy_desired_trial_list.append(xy_desired_trial)
+            yaw_desired_trial_list.append(yaw_desired_trial)
+
         while True:
+            self.reset()
             self.wait_until_ready()
             y = self.execute(planer_pose_traj, hypo_error=hypo_error)
             self.reset()
             if y is not None:
                 return y
             rospy.logwarn("failed to plan")
-            if manual_recovery:
-                self.sound_client.say("plan failed. Please put obejct in different pose")
+
+            if len(xy_desired_trial_list) == 0:
+                rospy.loginfo("no more trial. ask user to recover manually")
+                self.sound_client.say("No more trial remains. Please recover manually to successful plan", local=True)
                 rospy.logdebug("error: {}".format(hypo_error))
                 while True:
                     user_input = input("push y to retry")
@@ -482,7 +498,9 @@ class Executor:
             else:
                 rospy.loginfo("auto recovery")
                 while True:
-                    recovery_success = self.recover()
+                    xy_desired = xy_desired_trial_list.pop(0)
+                    yaw_desired = yaw_desired_trial_list.pop(0)
+                    recovery_success = self.recover(xy_desired, yaw_desired)
                     if recovery_success:
                         rospy.loginfo("recovery success")
                         break
