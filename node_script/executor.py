@@ -485,12 +485,20 @@ class Executor:
         while True:
             self.reset()
             self.wait_until_ready()
-            y = self.execute(planer_pose_traj, hypo_error=hypo_error)
-            self.reset()
-            if y is not None:
-                return y
-            rospy.logwarn("failed to plan. move to recovery")
-            self.sound_client.say("failed to plan. move to recovery")
+
+            # check the object is in the right position
+            assert self.tf_obj_base is not None
+            obj_pos = self.tf_obj_base.to_skrobot_coords().worldpos()
+
+            if obj_pos[0] < 0.55 and abs(obj_pos[1]) < 0.25:
+                y = self.execute(planer_pose_traj, hypo_error=hypo_error)
+                self.reset()
+                if y is not None:
+                    return y
+
+            message = "failed to execute. move to recovery"
+            rospy.logwarn("message")
+            self.sound_client.say(message)
 
             if len(xy_desired_trial_list) == 0:
                 rospy.loginfo("no more trial. ask user to recover manually")
