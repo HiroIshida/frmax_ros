@@ -306,13 +306,13 @@ class Executor:
 
     def recover(
         self,
-        xy_desired: Optional[np.ndarray] = None,
-        yaw_desired: Optional[float] = None,
+        xy_desired: np.ndarray,
+        yaw_desired: float,
     ) -> bool:
         assert yaw_desired is None or (-np.pi < yaw_desired < 0.0)
 
         if self.is_simulation:
-            return
+            return False
         self.reset()
 
         def create_pregrasp_and_grasp_poses(co_obj):
@@ -330,11 +330,7 @@ class Executor:
         co_obj = self.tf_obj_base.to_skrobot_coords()
         co_pregrasp, co_grasp = create_pregrasp_and_grasp_poses(co_obj)
 
-        if xy_desired is None:
-            xy_desired = np.array([0.5, 0.0])  # default
         xy_displacement = xy_desired - co_obj.worldpos()[:2]
-        if yaw_desired is None:
-            yaw_desired = -np.pi * 0.5
         yaw_now = rpy_angle(co_obj.worldrot())[0][0]  # default
         yaw_displacement = yaw_desired - yaw_now
         if np.abs(yaw_displacement) < 0.1 and np.linalg.norm(xy_displacement) < 0.1:
@@ -491,27 +487,29 @@ class Executor:
             self.reset()
             if y is not None:
                 return y
-            rospy.logwarn("failed to plan")
+            rospy.logwarn("failed to plan. move to recovery")
+            self.sound_client.say("failed to plan. move to recovery")
 
             if len(xy_desired_trial_list) == 0:
                 rospy.loginfo("no more trial. ask user to recover manually")
-                self.sound_client.say("No more trial remains. Please recover manually to successful plan", local=True)
+                self.sound_client.say(
+                    "No more trial remains. Please recover manually to successful plan", local=True
+                )
                 rospy.logdebug("error: {}".format(hypo_error))
                 while True:
                     user_input = input("push y to retry")
                     if user_input.lower() == "y":
                         break
             else:
-                rospy.loginfo("auto recovery")
-                while True:
-                    xy_desired = xy_desired_trial_list.pop(0)
-                    yaw_desired = yaw_desired_trial_list.pop(0)
-                    recovery_success = self.recover(xy_desired, yaw_desired)
-                    if recovery_success:
-                        rospy.loginfo("recovery success")
-                        break
-                    else:
-                        rospy.logwarn("recovery failed")
+                xy_desired = xy_desired_trial_list.pop(0)
+                yaw_desired = yaw_desired_trial_list.pop(0)
+
+                recovery_success = self.recover(xy_desired, yaw_desired)
+                if recovery_success:
+                    rospy.loginfo("recovery success")
+                else:
+                    rospy.logwarn("recovery failed")
+
         assert False
 
     def execute(
@@ -810,7 +808,7 @@ if __name__ == "__main__":
         n_init_sample = 5
         X, Y = [], []
         executor = Executor(None, auto_annotation=True)
-        # executor.recover()
+        executor.robust_execute(traj)
         # assert False
 
         # param init is assumed to be success with zero error
