@@ -101,10 +101,10 @@ class AprilPosePublisher:
                 return
 
             std = self.queue.get_std()
-            xyz_std = std[:3]
+            xy_std = std[:2]
             theta_std = std[3]
-            if np.any(xyz_std > 0.005) or theta_std > 0.03:
-                rospy.loginfo("TF is too noisy")
+            if np.any(xy_std > 0.005) or theta_std > 0.03:
+                rospy.loginfo("TF is too noisy: {}".format(std))
                 return
 
             pose_filtered = self.xyztheta_to_pose(xyztheta, target_frame)
