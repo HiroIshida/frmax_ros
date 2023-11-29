@@ -793,6 +793,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--reproduce", action="store_true", help="reprodice the debug arg")
+    parser.add_argument("--test", action="store_true", help="init-test")
+    parser.add_argument("--init", action="store_true", help="init")
     parser.add_argument("--episode", type=int, default=-1, help="episode number to load")
 
     args = parser.parse_args()
@@ -900,27 +902,71 @@ if __name__ == "__main__":
                 metric,
                 param_init,
                 config,
-                situation_sampler=sample_situation,
+                situation_sampler=situation_sampler,
                 is_valid_param=is_valid_param,
             )
         assert sampler is not None
 
-        for i in range(100):
-            i_episode = i + i_episode_offset
-            executor.sound_client.say("episode number {}".format(i_episode))
-            rospy.loginfo("iteration: {}".format(i_episode))
-            time.sleep(0.5)
-            sampler.update_center()
-            x = sampler.ask()
-            assert x is not None
-            param, error = x[:-3], x[-3:]
-            assert is_valid_param(param)
-            rospy.loginfo("param: {}".format(param))
-            rospy.loginfo("error: {}".format(error))
-            traj = create_trajectory(param)
-            y = executor.robust_execute(traj, hypo_error=error)
-            rospy.loginfo("label: {}".format(y))
-            sampler.tell(x, y)
-            cache_file_path = data_path / "sampler_cache-{}.pkl".format(i_episode)
-            with cache_file_path.open("wb") as f:
-                dill.dump(sampler, f)
+        if args.test or args.init:
+            if args.init:
+                opt_param = np.zeros(21)
+            else:
+                opt_param = sampler.optimize(200, method="cmaes")
+            results = []
+            success_count = 0
+            est_success_count = 0
+            fp_count = 0
+            for i in range(50):
+                error = situation_sampler()
+                rospy.loginfo("error: {}".format(error))
+                is_success_real = executor.robust_execute(
+                    create_trajectory(opt_param), hypo_error=error
+                )
+                rospy.loginfo("is_success_real: {}".format(is_success_real))
+                x = np.hstack([opt_param, error])
+
+                if is_success_real:
+                    success_count += 1
+
+                rospy.loginfo("success_count: {}".format(success_count))
+                rospy.loginfo("success rate: {}".format(success_count / (i + 1)))
+                if not args.init:
+                    is_success_est = sampler.fslset.is_inside(x)
+                    rospy.loginfo("is_success_est: {}".format(is_success_est))
+                    results.append((error, is_success_real, is_success_est))
+
+                    if is_success_est:
+                        est_success_count += 1
+                        if not is_success_real:
+                            fp_count += 1
+
+                    rospy.loginfo("fp_count: {}".format(fp_count))
+                    if est_success_count > 0:
+                        rospy.loginfo("fp rate: {}".format(fp_count / est_success_count))
+
+            if args.init:
+                file_name = data_path / "init_result.pkl"
+            else:
+                file_name = data_path / "test_result-{}.pkl".format(args.episode)
+            with file_name.open("wb") as f:
+                pickle.dump(results, f)
+        else:
+            for i in range(100):
+                i_episode = i + i_episode_offset
+                executor.sound_client.say("episode number {}".format(i_episode))
+                rospy.loginfo("iteration: {}".format(i_episode))
+                time.sleep(0.5)
+                sampler.update_center()
+                x = sampler.ask()
+                assert x is not None
+                param, error = x[:-3], x[-3:]
+                assert is_valid_param(param)
+                rospy.loginfo("param: {}".format(param))
+                rospy.loginfo("error: {}".format(error))
+                traj = create_trajectory(param)
+                y = executor.robust_execute(traj, hypo_error=error)
+                rospy.loginfo("label: {}".format(y))
+                sampler.tell(x, y)
+                cache_file_path = data_path / "sampler_cache-{}.pkl".format(i_episode)
+                with cache_file_path.open("wb") as f:
+                    dill.dump(sampler, f)
