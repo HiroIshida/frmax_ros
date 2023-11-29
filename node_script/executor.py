@@ -80,7 +80,7 @@ class SoundClientWrap(SoundClient):
         if local or self.always_local:
             subprocess.call('echo "{}" | festival --tts'.format(message), shell=True)
         rospy.logdebug("sound client: {}".format(message))
-        super().say(message, volume=0.3, blocking=blocking)
+        super().say(message, volume=0.2, blocking=blocking)
 
 
 class RobotInterfaceWrap(PR2ROSRobotInterface):
@@ -191,7 +191,7 @@ class Executor:
     auto_annotation: bool
     sound_client: SoundClientWrap
 
-    def __init__(self, debug_pose_msg: Optional[PoseStamped], auto_annotation: bool = False):
+    def __init__(self, debug_pose_msg: Optional[PoseStamped], auto_annotation: bool = True):
         pr2 = PR2(use_tight_joint_limit=False)
         pr2.reset_manip_pose()
         self.pr2 = pr2
@@ -216,7 +216,7 @@ class Executor:
             self.tf_obj_base = tf
             self.raw_msg = debug_pose_msg
         else:
-            self.sound_client = SoundClientWrap(always_local=True)
+            self.sound_client = SoundClientWrap(always_local=False)
             self.ri = RobotInterfaceWrap(pr2)
             self.ri.move_gripper("larm", 0.05)
             self.ri.move_gripper("rarm", 0.03)
@@ -266,7 +266,7 @@ class Executor:
                 return False
             else:
                 self.sound_client.say("uncertain. please label manually", local=True)
-                self.sound_client.say("aaaaaaaaaaaaaaaaaaaaaaaaa", local=True)
+                # self.sound_client.say("aaaaaaaaaaaaaaaaaaaaaaaaa", local=True)
                 get_humann_annotation()
         else:
             return get_humann_annotation()
@@ -300,7 +300,7 @@ class Executor:
                     "Could not find object for {} seconds".format(timeout), local=True
                 )
                 self.sound_client.say("Please input y after fixing the environment", local=True)
-                self.sound_client.say("aaaaaaaaaaaaaaaaaaaaaaaaa", local=True)
+                # self.sound_client.say("aaaaaaaaaaaaaaaaaaaaaaaaa", local=True)
                 while True:
                     user_input = input("push y after fixing the environment")
                     if user_input.lower() == "y":
