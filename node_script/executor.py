@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -777,6 +778,16 @@ def is_valid_param(param: np.ndarray) -> bool:
     return True
 
 
+@dataclass
+class UniformSituationSampler:
+    b_min: np.ndarray
+    b_max: np.ndarray
+
+    def __call__(self) -> np.ndarray:
+        s = np.random.uniform(self.b_min, self.b_max)
+        return s
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -817,11 +828,9 @@ if __name__ == "__main__":
         rospy.loginfo("label: {}".format(out))
     else:
 
-        def sample_situation() -> np.ndarray:
-            x = np.random.uniform(-0.03, 0.03)
-            y = np.random.uniform(-0.03, 0.03)
-            yaw = np.random.uniform(-np.pi * 0.1, np.pi * 0.1)
-            return np.array([x, y, yaw])
+        situation_sampler = UniformSituationSampler(
+            np.array([-0.03, -0.03, -np.pi * 0.2]), np.array([0.03, 0.03, np.pi * 0.2])
+        )
 
         # create initial dataset
         executor = Executor(None, auto_annotation=True)
@@ -863,7 +872,7 @@ if __name__ == "__main__":
             executor.robust_execute(traj)  # this is supposed to be success
 
             for _ in range(n_init_sample):
-                error = sample_situation()
+                error = situation_sampler()
                 is_success = executor.robust_execute(traj, hypo_error=error)
                 X.append(np.hstack([param_init, error]))
                 Y.append(is_success)
