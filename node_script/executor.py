@@ -956,7 +956,6 @@ if __name__ == "__main__":
                 executor.sound_client.say("episode number {}".format(i_episode))
                 rospy.loginfo("iteration: {}".format(i_episode))
                 time.sleep(0.5)
-                sampler.update_center()
                 x = sampler.ask()
                 assert x is not None
                 param, error = x[:-3], x[-3:]
