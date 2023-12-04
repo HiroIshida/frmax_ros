@@ -428,7 +428,7 @@ class Executor:
                 self.ri.angle_vector(self.av_home, time_scale=1.0, time=5.0)
 
                 avs = get_avs(q_list_reach)
-                times = [0.6] * (len(avs) - 2) + [1.0, 2.0]
+                times = [0.3] * (len(avs) - 2) + [1.0, 2.0]
                 self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
                 self.ri.wait_interpolation()
                 self.ri.move_gripper("rarm", 0.0)
@@ -458,7 +458,7 @@ class Executor:
                 rospy.logdebug("(recover) start going back to home position")
                 q_list_back = [q_predesired, q_pregrasp] + q_init_to_q_pregrasp[::-1]
                 avs = get_avs(q_list_back)
-                times = [0.6] * len(avs)
+                times = [0.3] * len(avs)
                 self.ri.angle_vector_sequence(avs, times=times, time_scale=1.0)
                 self.ri.wait_interpolation()
                 rospy.logdebug("recovered procedure finished")
@@ -690,7 +690,7 @@ class Executor:
                 set_robot_state(self.pr2, joint_names, q)
                 avs.append(self.pr2.angle_vector())
 
-            times_reach = [0.4 for _ in range(n_resample)]
+            times_reach = [0.3 for _ in range(n_resample)]
             times_grasp = [0.5 for _ in range(len(planer_pose_traj) - 1)]
             avs_reach, avs_grasp = avs[:n_resample], avs[n_resample:]
             rospy.logdebug("start reacing")
@@ -714,7 +714,7 @@ class Executor:
             label = self.wait_for_label()
             self.ri.move_gripper("larm", 0.05)
             self.ri.angle_vector_sequence(
-                avs_reach[::-1], times=[0.4] * len(avs_reach), time_scale=1.0
+                avs_reach[::-1], times=[0.5] * 2 + [0.2] * (len(avs_reach) - 2), time_scale=1.0
             )
             self.ri.wait_interpolation()
             self.pr2.angle_vector(self.ri.potentio_vector())
