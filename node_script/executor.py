@@ -192,7 +192,7 @@ class Executor:
     sound_client: SoundClientWrap
 
     def __init__(self, debug_pose_msg: Optional[PoseStamped], auto_annotation: bool = True):
-        pr2 = PR2(use_tight_joint_limit=False)
+        pr2 = PR2()
         pr2.reset_manip_pose()
         self.pr2 = pr2
         self.pr2.r_shoulder_pan_joint.joint_angle(-1.1)
