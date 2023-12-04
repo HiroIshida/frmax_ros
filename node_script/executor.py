@@ -916,6 +916,12 @@ if __name__ == "__main__":
             success_count = 0
             est_success_count = 0
             fp_count = 0
+
+            if args.init:
+                file_name = data_path / "init_result.pkl"
+            else:
+                file_name = data_path / "test_result-{}.pkl".format(args.episode)
+
             for i in range(50):
                 error = situation_sampler()
                 rospy.loginfo("error: {}".format(error))
@@ -944,12 +950,8 @@ if __name__ == "__main__":
                     if est_success_count > 0:
                         rospy.loginfo("fp rate: {}".format(fp_count / est_success_count))
 
-            if args.init:
-                file_name = data_path / "init_result.pkl"
-            else:
-                file_name = data_path / "test_result-{}.pkl".format(args.episode)
-            with file_name.open("wb") as f:
-                pickle.dump(results, f)
+                    with file_name.open("wb") as f:
+                        pickle.dump(results, f)
         else:
             for i in range(100):
                 i_episode = i + i_episode_offset
