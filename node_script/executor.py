@@ -21,6 +21,7 @@ from frmax2.core import (
     DGSamplerConfig,
     DistributionGuidedSampler,
 )
+from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from movement_primitives.dmp import DMP
 from nav_msgs.msg import Path as RosPath
@@ -75,11 +76,16 @@ class SoundClientWrap(SoundClient):
     def __init__(self, always_local: bool = False):
         super().__init__()
         self.always_local = always_local
+        self.string_pub_debug = rospy.Publisher("/sound_play/string_debug", String, queue_size=1, latch=True)
+        self.string_pub_info = rospy.Publisher("/sound_play/string_info", String, queue_size=1, latch=True)
 
-    def say(self, message: str, blocking: bool = False, local: bool = False):
+    def say(self, message: str, blocking: bool = False, local: bool = False, pub_info: bool = False):
         if local or self.always_local:
             subprocess.call('echo "{}" | festival --tts'.format(message), shell=True)
         rospy.logdebug("sound client: {}".format(message))
+        if pub_info:
+            self.string_pub_info.publish(String(data=message))
+        self.string_pub_debug.publish(String(data=message))
         super().say(message, volume=0.2, blocking=blocking)
 
 
@@ -266,8 +272,8 @@ class Executor:
                 return False
             else:
                 self.sound_client.say("uncertain. please label manually", local=True)
-                # self.sound_client.say("aaaaaaaaaaaaaaaaaaaaaaaaa", local=True)
-                get_humann_annotation()
+                anot = get_humann_annotation()
+                self.sound_client.say("human annotation {} is provided".format(anot), local=True)
         else:
             return get_humann_annotation()
 
@@ -300,7 +306,6 @@ class Executor:
                     "Could not find object for {} seconds".format(timeout), local=True
                 )
                 self.sound_client.say("Please input y after fixing the environment", local=True)
-                # self.sound_client.say("aaaaaaaaaaaaaaaaaaaaaaaaa", local=True)
                 while True:
                     user_input = input("push y after fixing the environment")
                     if user_input.lower() == "y":
@@ -641,6 +646,7 @@ class Executor:
                 q_list.append(ret.q)
             return q_list
 
+        self.sound_client.say("Planning grasping trajectory...")
         n_resample = 8
         q_list = None
         for _ in range(5):
@@ -651,9 +657,10 @@ class Executor:
             else:
                 break
         if q_list is None:
+            self.sound_client.say(f"Failed at planning grasping trajectory 5 times.")
             rospy.logwarn("failed to plan")
             return None
-        rospy.logdebug("successfully planned reaching + grasping trajectory")
+        self.sound_client.say(f"succeed in planning grasping trajectory. Move on to execution.")
 
         if self.is_simulation:
             viewer = TrimeshSceneViewer()
@@ -735,9 +742,9 @@ class Executor:
                 rospy.loginfo("at home position")
 
             if label:
-                self.sound_client.say("success")
+                self.sound_client.say("label: success", pub_info=True)
             else:
-                self.sound_client.say("failure")
+                self.sound_client.say("label: failure", pub_info=True)
             return label
 
 
