@@ -800,11 +800,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--reproduce", action="store_true", help="reprodice the debug arg")
-    parser.add_argument("--test", action="store_true", help="init-test")
-    parser.add_argument("--init", action="store_true", help="init")
+    parser.add_argument("--mode", type=str, default="train")
     parser.add_argument("--episode", type=int, default=-1, help="episode number to load")
 
     args = parser.parse_args()
+
+    assert args.mode in ["train", "test", "init-test", "additional"]
 
     if args.reproduce:
         cache_file_path = Path("/tmp/frmax_debug_args.pkl")
@@ -851,14 +852,14 @@ if __name__ == "__main__":
 
         sampler: Optional[BlackBoxSampler] = None
         if args.episode >= 0:
-            i_episode_offset = args.episode + 1
+            episode_offset = args.episode + 1
             cache_file_path = data_path / "sampler_cache-{}.pkl".format(args.episode)
             assert cache_file_path.exists()
             if cache_file_path.exists():
                 with cache_file_path.open("rb") as f:
                     sampler = dill.load(f)
         else:
-            i_episode_offset = 0
+            episode_offset = 0
             if len(list(data_path.iterdir())) > 0:
                 rospy.loginfo("cache file exists")
                 # wait for user input to continue
@@ -886,11 +887,11 @@ if __name__ == "__main__":
                 X.append(np.hstack([param_init, error]))
                 Y.append(is_success)
             rospy.loginfo("Y: {}".format(Y))
-            executor.sound_client.say("all initial samples are collected")
+            executor.sound_client.say("all initial samples are collected", pub_info=True)
 
             X = np.array(X)
             Y = np.array(Y)
-            ls_param = np.ones(21) * 3
+            ls_param = np.ones(21) * 1
             ls_err = np.array([0.005, 0.005, np.deg2rad(5.0)])
             metric = CompositeMetric.from_ls_list([ls_param, ls_err])
 
@@ -914,7 +915,8 @@ if __name__ == "__main__":
             )
         assert sampler is not None
 
-        if args.test or args.init:
+        mode = args.mode
+        if mode in ["test", "init-test"]:
             if args.init:
                 opt_param = np.zeros(21)
             else:
@@ -959,11 +961,24 @@ if __name__ == "__main__":
 
                     with file_name.open("wb") as f:
                         pickle.dump(results, f)
-        else:
+        elif mode == "additional":
+            opt_param = sampler.optimize(200, method="cmaes")
+            for i in range(30):
+                executor.sound_client.say("additional episode number {}".format(i), pub_info=True)
+                x = sampler.ask_additional(opt_param)
+                param, error = x[:-3], x[-3:]
+                traj = create_trajectory(param)
+                y = executor.robust_execute(traj, hypo_error=error)
+                time.sleep(1.0)  # to display the label on rviz
+                rospy.loginfo("label: {}".format(y))
+                sampler.tell(x, y)
+                cache_file_path = data_path / f"sampler_cache-{args.episode}-add{i}.pkl"
+                with cache_file_path.open("wb") as f:
+                    dill.dump(sampler, f)
+        elif mode == "train":
             for i in range(100):
-                i_episode = i + i_episode_offset
-                executor.sound_client.say("episode number {}".format(i_episode))
-                rospy.loginfo("iteration: {}".format(i_episode))
+                i_episode = i + episode_offset
+                executor.sound_client.say("episode number {}".format(i_episode), pub_info=True)
                 time.sleep(0.5)
                 x = sampler.ask()
                 assert x is not None
@@ -973,8 +988,11 @@ if __name__ == "__main__":
                 rospy.loginfo("error: {}".format(error))
                 traj = create_trajectory(param)
                 y = executor.robust_execute(traj, hypo_error=error)
+                time.sleep(1.0)  # to display the label on rviz
                 rospy.loginfo("label: {}".format(y))
                 sampler.tell(x, y)
                 cache_file_path = data_path / "sampler_cache-{}.pkl".format(i_episode)
                 with cache_file_path.open("wb") as f:
                     dill.dump(sampler, f)
+        else:
+            assert False
