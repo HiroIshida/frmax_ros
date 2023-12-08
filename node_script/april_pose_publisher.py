@@ -107,7 +107,8 @@ class AprilPosePublisher:
                 rospy.loginfo("TF is too noisy: {}".format(std))
                 return
 
-            pose_filtered = self.xyztheta_to_pose(xyztheta, target_frame)
+            xyztheta_filtered = self.queue.get_average()
+            pose_filtered = self.xyztheta_to_pose(xyztheta_filtered, target_frame)
             self.pub_filtered.publish(pose_filtered)
             rospy.loginfo("Published pose_filtered: {}".format(pose_filtered))
 
