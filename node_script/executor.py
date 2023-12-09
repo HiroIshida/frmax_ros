@@ -135,17 +135,17 @@ class RobotInterfaceWrap(PR2ROSRobotInterface):
         av[self.offset_indices] += self.offset_values
         super().angle_vector(av, **kwargs)
 
-    def angle_vector_sequence(self, avs, **kwargs):
-        # reflect
-        self.pr2.angle_vector(avs[-1])
-        avs = [av.copy() for av in avs]
-        rospy.logdebug("avs[0]: {}".format(avs[0]))
-        rospy.logdebug("avs[-1]: {}".format(avs[-1]))
-        for av in avs:
-            av[self.offset_indices] += self.offset_values
-            if np.any(np.isinf(av)) or np.any(np.isnan(av)):
-                raise ValueError("angle vector contains inf or nan")
-        super().angle_vector_sequence(avs, **kwargs)
+    # def angle_vector_sequence(self, avs, **kwargs):
+    #     # reflect
+    #     self.pr2.angle_vector(avs[-1])
+    #     avs = [av.copy() for av in avs]
+    #     rospy.logdebug("avs[0]: {}".format(avs[0]))
+    #     rospy.logdebug("avs[-1]: {}".format(avs[-1]))
+    #     for av in avs:
+    #         av[self.offset_indices] += self.offset_values
+    #         if np.any(np.isinf(av)) or np.any(np.isnan(av)):
+    #             raise ValueError("angle vector contains inf or nan")
+    #     super().angle_vector_sequence(avs, **kwargs)
 
 
 class PlanningCongig:
@@ -156,6 +156,7 @@ class PlanningCongig:
     box_const: BoxConst
     efkin: ArticulatedEndEffectorKinematicsMap
     table: Box
+    back_side_panel: Box
     magcup: Cylinder
 
     def __init__(
@@ -170,7 +171,8 @@ class PlanningCongig:
         joint_names = pr2_plan_conf._get_control_joint_names()
 
         colkin = pr2_plan_conf.get_collision_kin()
-        table = Box([0.88, 1.0, 0.1], pos=[0.6, 0.0, 0.66], with_sdf=True)
+        table = Box([0.88, 0.75, 0.04], pos=[0.6, 0.0, 0.67], with_sdf=True)
+        back_side_panel = Box([0.04, 0.75, 1.0], pos=[0.68, 0.0, 0.5], with_sdf=True)
         dummy_obstacle = Box([0.45, 0.6, 0.03], pos=[0.5, 0.0, 1.2], with_sdf=True)
         dummy_obstacle.visual_mesh.visual.face_colors = [255, 255, 255, 150]  # type: ignore
         if consider_dummy_obstacle:
@@ -181,10 +183,13 @@ class PlanningCongig:
         if use_kanazawa:
             magcup = Cylinder(0.0525, 0.12, with_sdf=True)
         else:
-            magcup = Cylinder(0.042, 0.1, with_sdf=True)
+            magcup = Cylinder(0.042, 0.095, with_sdf=True)
         magcup.visual_mesh.visual.face_colors = [255, 0, 0, 150]  # type: ignore
         magcup.newcoords(tf_obj_base.to_skrobot_coords())
-        magcup.translate([0, 0, -0.03])
+        if use_kanazawa:
+            magcup.translate([0, 0, -0.03])
+        else:
+            magcup.translate([0, 0, -0.03])
 
         colfree_const_all = CollFreeConst(colkin, UnionSDF(table_sdfs + [magcup.sdf]), pr2)
         colfree_const_table = CollFreeConst(colkin, UnionSDF(table_sdfs), pr2)
@@ -200,6 +205,7 @@ class PlanningCongig:
         self.box_const = box_const
         self.efkin = efkin
         self.table = table
+        self.back_side_panel = back_side_panel
         self.magcup = magcup
 
 
@@ -242,7 +248,8 @@ class Executor:
         else:
             self.sound_client = SoundClientWrap(always_local=False)
             self.ri = RobotInterfaceWrap(pr2)
-            self.ri.move_gripper("larm", 0.03)
+            self.larm_gripper_pos = 0.03
+            self.ri.move_gripper("larm", self.larm_gripper_pos)
             self.ri.move_gripper("rarm", 0.03)
             self.ri.angle_vector(self.pr2.angle_vector())
             self.ri.wait_interpolation()
@@ -664,6 +671,20 @@ class Executor:
                 q_list.append(ret.q)
             return q_list
 
+        if self.is_simulation:
+            viewer = TrimeshSceneViewer()
+            self.tf_obj_base.to_skrobot_coords()
+            # axis_object = Axis.from_coords(co_object)
+            axis = Axis.from_coords(co_reach_init)
+            viewer.add(self.pr2)
+            viewer.add(plan_config.back_side_panel)
+            viewer.add(plan_config.table)
+            viewer.add(plan_config.magcup)
+            viewer.add(axis)
+            # viewer.add(axis_object)
+            viewer.show()
+            time.sleep(1000)
+
         self.sound_client.say("Planning grasping trajectory...")
         n_resample = 15
         q_list = None
@@ -679,24 +700,6 @@ class Executor:
             rospy.logwarn("failed to plan")
             return None
         self.sound_client.say(f"succeed in planning grasping trajectory. Move on to execution.")
-
-        if self.is_simulation:
-            viewer = TrimeshSceneViewer()
-            co_object = self.tf_obj_base.to_skrobot_coords()
-            axis_object = Axis.from_coords(co_object)
-            axis = Axis.from_coords(co_reach)
-            viewer.add(self.pr2)
-            viewer.add(table)
-            viewer.add(dummy_obstacle)
-            viewer.add(magcup)
-            viewer.add(axis)
-            viewer.add(axis_object)
-            viewer.show()
-            for q in q_list:
-                set_robot_state(self.pr2, joint_names, q)
-                viewer.redraw()
-                time.sleep(1.0)
-            time.sleep(1000)
 
         if self.is_simulation:
             label = self.wait_for_label()
@@ -718,6 +721,7 @@ class Executor:
 
             rospy.logdebug("start grasping phase")
             self.sound_client.say("grasping phase")
+            self.ri.move_gripper("larm", self.larm_gripper_pos)
             time.sleep(1.5)
             self.ri.angle_vector_sequence(avs_grasp, times=times_grasp, time_scale=1.0)
             self.ri.wait_interpolation()
@@ -725,12 +729,17 @@ class Executor:
             self.ri.move_gripper("larm", 0.0)
             time.sleep(2.0)
             self.pr2.larm.move_end_pos(
-                [-0.02, 0.0, 0.0], wrt="local"
+                [-0.015, 0.0, 0.0], wrt="local"
             )  # move back bit to ensure robustness
             self.ri.angle_vector(self.pr2.angle_vector(), time_scale=1.0, time=1.0)
             self.ri.wait_interpolation()
-            label = self.wait_for_label()
-            self.ri.move_gripper("larm", 0.05)
+            label = self.wait_for_label()  # label
+
+            self.ri.move_gripper("larm", 0.07)  # large enough to avoid being hooked
+            # slightly move back
+            self.pr2.larm.move_end_pos([-0.02, 0.0, 0.0], wrt="local")
+            self.ri.angle_vector(self.pr2.angle_vector(), time_scale=1.0, time=1.0)
+
             self.ri.angle_vector_sequence(
                 avs_reach[::-1], times=[0.5] * 2 + [0.2] * (len(avs_reach) - 2), time_scale=1.0
             )
@@ -770,7 +779,7 @@ def create_trajectory(param: np.ndarray, dt: float = 0.1, use_kanazawa: bool = F
     assert param.shape == (3 * 6 + 3,)
     n_split = 100
     if use_kanazawa:
-        start = np.array([-0.06, -0.045, 0.0])
+        start = np.array([-0.065, -0.045, 0.0])
         goal = np.array([-0.0, -0.045, 0.0])
     else:
         start = np.array([-0.06, -0.04, 0.0])
@@ -939,7 +948,7 @@ if __name__ == "__main__":
 
         mode = args.mode
         if mode in ["test", "init-test"]:
-            if args.init:
+            if mode == "init-test":
                 opt_param = np.zeros(21)
             else:
                 opt_param = sampler.optimize(200, method="cmaes")
@@ -948,7 +957,7 @@ if __name__ == "__main__":
             est_success_count = 0
             fp_count = 0
 
-            if args.init:
+            if args.mode == "init-tset":
                 file_name = data_path / "init_result.pkl"
             else:
                 file_name = data_path / "test_result-{}.pkl".format(args.episode)
@@ -984,7 +993,7 @@ if __name__ == "__main__":
                     with file_name.open("wb") as f:
                         pickle.dump(results, f)
         elif mode == "additional":
-            opt_param = sampler.optimize(200, method="cmaes")
+            opt_param = sampler.optimize(500, method="cmaes")
             for i in range(30):
                 executor.sound_client.say("additional episode number {}".format(i), pub_info=True)
                 x = sampler.ask_additional(opt_param)
