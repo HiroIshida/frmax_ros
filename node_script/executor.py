@@ -21,7 +21,6 @@ from frmax2.core import (
     DGSamplerConfig,
     DistributionGuidedSampler,
 )
-from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from movement_primitives.dmp import DMP
 from nav_msgs.msg import Path as RosPath
@@ -40,7 +39,7 @@ from skrobot.models.pr2 import PR2
 from skrobot.sdf import UnionSDF
 from skrobot.viewers import TrimeshSceneViewer
 from sound_play.libsoundplay import SoundClient
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String
 from tinyfk import RotationType
 from utils import CoordinateTransform, chain_transform
 
@@ -76,10 +75,16 @@ class SoundClientWrap(SoundClient):
     def __init__(self, always_local: bool = False):
         super().__init__()
         self.always_local = always_local
-        self.string_pub_debug = rospy.Publisher("/sound_play/string_debug", String, queue_size=1, latch=True)
-        self.string_pub_info = rospy.Publisher("/sound_play/string_info", String, queue_size=1, latch=True)
+        self.string_pub_debug = rospy.Publisher(
+            "/sound_play/string_debug", String, queue_size=1, latch=True
+        )
+        self.string_pub_info = rospy.Publisher(
+            "/sound_play/string_info", String, queue_size=1, latch=True
+        )
 
-    def say(self, message: str, blocking: bool = False, local: bool = False, pub_info: bool = False):
+    def say(
+        self, message: str, blocking: bool = False, local: bool = False, pub_info: bool = False
+    ):
         if local or self.always_local:
             subprocess.call('echo "{}" | festival --tts'.format(message), shell=True)
         rospy.logdebug("sound client: {}".format(message))
