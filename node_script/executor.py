@@ -244,7 +244,7 @@ class Executor:
 
     def callback(self, msg: PoseStamped):
         self.raw_msg = copy.deepcopy(msg)
-        msg.pose.position.z = 0.8  # for cup
+        msg.pose.position.z = 0.78  # for cup
         tf = CoordinateTransform.from_ros_pose(msg.pose)
         tf.src = "object"
         tf.dest = "base"
