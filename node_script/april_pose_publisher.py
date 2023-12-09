@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from copy import deepcopy
 from typing import List, Tuple
 
 import numpy as np
@@ -11,6 +12,7 @@ from skrobot.coordinates.math import (
     wxyz2xyzw,
     xyzw2wxyz,
 )
+from utils import CoordinateTransform
 
 
 class AverageQueue:
@@ -60,6 +62,9 @@ class AprilPosePublisher:
     def __init__(self):
         self.pub_filtered = rospy.Publisher("object_pose_filtered", PoseStamped, queue_size=10)
         self.pub = rospy.Publisher("object_pose", PoseStamped, queue_size=10)
+        self.pub_filtered_offset = rospy.Publisher(
+            "object_pose_filtered_offset", PoseStamped, queue_size=10
+        )
         self.listener = tf.TransformListener()
         self.queue = AverageQueue(max_size=10)
 
@@ -111,6 +116,16 @@ class AprilPosePublisher:
             pose_filtered = self.xyztheta_to_pose(xyztheta_filtered, target_frame)
             self.pub_filtered.publish(pose_filtered)
             rospy.loginfo("Published pose_filtered: {}".format(pose_filtered))
+
+            # offset for hubo magcup
+            co = CoordinateTransform.from_ros_pose(pose_filtered.pose).to_skrobot_coords()
+            offset_x = 0.015  # 0.015 because of asymmetrical attachment
+            offset_y = -0.008  # due to kinect rgb / depth mismatch
+            co.translate([offset_x, offset_y, 0.0])
+            pose_with_offset = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
+            pose_filtered_offset = deepcopy(pose_filtered)
+            pose_filtered_offset.pose = pose_with_offset
+            self.pub_filtered_offset.publish(pose_filtered_offset)
 
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             rospy.loginfo("TF Exception")

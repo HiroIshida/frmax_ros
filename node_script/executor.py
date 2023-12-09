@@ -233,7 +233,7 @@ class Executor:
             rospy.logdebug("av_home: {}".format(self.av_home))
 
             self.pub = Publisher("/debug_trajectory", RosPath, queue_size=1, latch=True)
-            self.sub = Subscriber("/object_pose_filtered", PoseStamped, self.callback)
+            self.sub = Subscriber("/object_pose_filtered_offset", PoseStamped, self.callback)
             self.tf_obj_base = None
             self.sound_client.say("ready to start", local=True)
 
