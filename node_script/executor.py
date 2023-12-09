@@ -233,7 +233,7 @@ class Executor:
         else:
             self.sound_client = SoundClientWrap(always_local=False)
             self.ri = RobotInterfaceWrap(pr2)
-            self.ri.move_gripper("larm", 0.05)
+            self.ri.move_gripper("larm", 0.03)
             self.ri.move_gripper("rarm", 0.03)
             self.ri.angle_vector(self.pr2.angle_vector())
             self.ri.wait_interpolation()
@@ -340,7 +340,7 @@ class Executor:
             co_pregrasp.rotate(-np.pi * 0.5, "x")
 
             co_grasp = co_pregrasp.copy_worldcoords()
-            co_grasp.translate([0.063, 0.0, 0.0])
+            co_grasp.translate([0.058, 0.0, 0.0])
             return co_pregrasp, co_grasp
 
         self.wait_until_ready()
@@ -656,7 +656,7 @@ class Executor:
             return q_list
 
         self.sound_client.say("Planning grasping trajectory...")
-        n_resample = 8
+        n_resample = 15
         q_list = None
         for _ in range(5):
             q_list = whole_plan(n_resample)
