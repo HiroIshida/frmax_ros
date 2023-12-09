@@ -119,8 +119,8 @@ class AprilPosePublisher:
 
             # offset for hubo magcup
             co = CoordinateTransform.from_ros_pose(pose_filtered.pose).to_skrobot_coords()
-            offset_x = 0.015  # 0.015 because of asymmetrical attachment
-            offset_y = -0.008  # due to kinect rgb / depth mismatch
+            offset_x = 0.013  # because of asymmetrical attachment
+            offset_y = -0.004  # due to kinect rgb / depth mismatch
             co.translate([offset_x, offset_y, 0.0])
             pose_with_offset = CoordinateTransform.from_skrobot_coords(co).to_ros_pose()
             pose_filtered_offset = deepcopy(pose_filtered)

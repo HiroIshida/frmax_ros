@@ -520,6 +520,7 @@ class Executor:
             # check the object is in the right position
             assert self.tf_obj_base is not None
             obj_pos = self.tf_obj_base.to_skrobot_coords().worldpos()
+            obj_yaw = rpy_angle(self.tf_obj_base.to_skrobot_coords().worldrot())[0][0]
 
             if obj_pos[0] < 0.55 and abs(obj_pos[1]) < 0.25:
                 y = self.execute(planer_pose_traj, hypo_error=hypo_error)
@@ -570,15 +571,15 @@ class Executor:
         x_error, y_error, yaw_error = hypo_error
 
         def to_transform(x, y, yaw, rot) -> CoordinateTransform:
-            tf_obj_hypo = CoordinateTransform.from_skrobot_coords(
-                Coordinates([x_error, y_error, 0.0], [yaw_error, 0, 0.0]), src="object", dest="hypo"
+            tf_hypo_obj = CoordinateTransform.from_skrobot_coords(
+                Coordinates([x_error, y_error, 0.0], [yaw_error, 0, 0.0]), src="hypo", dest="object"
             )
             tf_reach_hypo = CoordinateTransform.from_skrobot_coords(
                 Coordinates([x, y, 0.0], [yaw, 0, rot]), src="reach", dest="hypo"
             )
             tf_reach_obj = chain_transform(
                 tf_reach_hypo,  # reach -> hypo
-                tf_obj_hypo.inverse(),  # hypo -> object
+                tf_hypo_obj,  # hypo -> object
             )
             assert self.tf_obj_base is not None
             tf_reach_base = chain_transform(
@@ -779,7 +780,7 @@ def create_trajectory(param: np.ndarray, dt: float = 0.1, use_kanazawa: bool = F
     assert param.shape == (3 * 6 + 3,)
     n_split = 100
     if use_kanazawa:
-        start = np.array([-0.065, -0.045, 0.0])
+        start = np.array([-0.06, -0.045, 0.0])
         goal = np.array([-0.0, -0.045, 0.0])
     else:
         start = np.array([-0.06, -0.04, 0.0])
@@ -922,7 +923,7 @@ if __name__ == "__main__":
 
             X = np.array(X)
             Y = np.array(Y)
-            ls_param = np.ones(21) * 1
+            ls_param = np.ones(21)
             ls_err = np.array([0.005, 0.005, np.deg2rad(5.0)])
             metric = CompositeMetric.from_ls_list([ls_param, ls_err])
 
@@ -1009,7 +1010,7 @@ if __name__ == "__main__":
         elif mode == "train":
             for i in range(100):
                 i_episode = i + episode_offset
-                executor.sound_client.say("episode number {}".format(i_episode), pub_info=True)
+                executor.sound_client.say("episode number {}".format(i_episode), pub_info=True, local=True)
                 time.sleep(0.5)
                 x = sampler.ask()
                 assert x is not None
