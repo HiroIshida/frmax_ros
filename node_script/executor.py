@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import dill
 import numpy as np
@@ -92,6 +92,14 @@ class SoundClientWrap(SoundClient):
             self.string_pub_info.publish(String(data=message))
         self.string_pub_debug.publish(String(data=message))
         super().say(message, volume=0.2, blocking=blocking)
+
+
+class DummySoundClinent:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def say(self, *args, **kwargs):
+        pass
 
 
 class RobotInterfaceWrap(PR2ROSRobotInterface):
@@ -204,7 +212,7 @@ class Executor:
     q_home: np.ndarray
     av_home: np.ndarray
     auto_annotation: bool
-    sound_client: SoundClientWrap
+    sound_client: Union[SoundClientWrap, DummySoundClinent]
 
     def __init__(self, debug_pose_msg: Optional[PoseStamped], auto_annotation: bool = True):
         pr2 = PR2()
@@ -230,6 +238,7 @@ class Executor:
             tf.dest = "base"
             self.tf_obj_base = tf
             self.raw_msg = debug_pose_msg
+            self.sound_client = DummySoundClinent()
         else:
             self.sound_client = SoundClientWrap(always_local=False)
             self.ri = RobotInterfaceWrap(pr2)
