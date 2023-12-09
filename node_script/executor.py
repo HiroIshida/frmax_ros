@@ -156,6 +156,7 @@ class PlanningCongig:
         pr2: PR2,
         consider_dummy_obstacle: bool = True,
         arm="larm",
+        use_kanazawa: bool = False,
     ):
         pr2_plan_conf = PR2Config(control_arm=arm)
         joint_names = pr2_plan_conf._get_control_joint_names()
@@ -169,7 +170,10 @@ class PlanningCongig:
         else:
             table_sdfs = [table.sdf]
 
-        magcup = Cylinder(0.0525, 0.12, with_sdf=True)
+        if use_kanazawa:
+            magcup = Cylinder(0.0525, 0.12, with_sdf=True)
+        else:
+            magcup = Cylinder(0.042, 0.1, with_sdf=True)
         magcup.visual_mesh.visual.face_colors = [255, 0, 0, 150]  # type: ignore
         magcup.newcoords(tf_obj_base.to_skrobot_coords())
         magcup.translate([0, 0, -0.03])
@@ -753,11 +757,15 @@ class Executor:
             return label
 
 
-def create_trajectory(param: np.ndarray, dt: float = 0.1) -> np.ndarray:
+def create_trajectory(param: np.ndarray, dt: float = 0.1, use_kanazawa: bool = False) -> np.ndarray:
     assert param.shape == (3 * 6 + 3,)
     n_split = 100
-    start = np.array([-0.06, -0.045, 0.0])
-    goal = np.array([-0.0, -0.045, 0.0])
+    if use_kanazawa:
+        start = np.array([-0.06, -0.045, 0.0])
+        goal = np.array([-0.0, -0.045, 0.0])
+    else:
+        start = np.array([-0.06, -0.04, 0.0])
+        goal = np.array([-0.0, -0.04, 0.0])
     diff_step = (goal - start) / (n_split - 1)
     traj_default = np.array([start + diff_step * i for i in range(n_split)])
     n_weights_per_dim = 6
