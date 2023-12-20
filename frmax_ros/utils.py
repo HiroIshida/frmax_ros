@@ -96,16 +96,22 @@ class CoordinateTransform:
     def to_skrobot_coords(self) -> Coordinates:
         return Coordinates(self.trans, self.rot)
 
+    def __mul__(self, other: "CoordinateTransform") -> "CoordinateTransform":
+        return self.chain_transform(self, other)
 
-def chain_transform(
-    tf_a2b: CoordinateTransform, tf_b2c: CoordinateTransform
-) -> CoordinateTransform:
-    if tf_a2b.dest is not None and tf_b2c.src is not None:
-        assert tf_a2b.dest == tf_b2c.src, "{} does not match {}".format(tf_a2b.dest, tf_b2c.src)
+    def __rmul__(self, other: "CoordinateTransform") -> "CoordinateTransform":
+        return self.chain_transform(other, self)
 
-    trans_a2c = tf_b2c.trans + tf_b2c.rot.dot(tf_a2b.trans)
-    rot_a2c = tf_b2c.rot.dot(tf_a2b.rot)
+    @staticmethod
+    def chain_transform(
+        tf_a2b: "CoordinateTransform", tf_b2c: "CoordinateTransform"
+    ) -> "CoordinateTransform":
+        if tf_a2b.dest is not None and tf_b2c.src is not None:
+            assert tf_a2b.dest == tf_b2c.src, "{} does not match {}".format(tf_a2b.dest, tf_b2c.src)
 
-    src_new = tf_a2b.src
-    dest_new = tf_b2c.dest
-    return CoordinateTransform(trans_a2c, rot_a2c, src_new, dest_new)
+        trans_a2c = tf_b2c.trans + tf_b2c.rot.dot(tf_a2b.trans)
+        rot_a2c = tf_b2c.rot.dot(tf_a2b.rot)
+
+        src_new = tf_a2b.src
+        dest_new = tf_b2c.dest
+        return CoordinateTransform(trans_a2c, rot_a2c, src_new, dest_new)

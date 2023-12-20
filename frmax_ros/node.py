@@ -18,7 +18,7 @@ from skrobot.coordinates.math import (
 )
 from typing_extensions import Optional
 
-from frmax_ros.utils import CoordinateTransform, chain_transform
+from frmax_ros.utils import CoordinateTransform
 
 
 class AverageQueue:
@@ -65,31 +65,31 @@ class AverageQueue:
 class ObjectPoseProvider:
     listener: tf.TransformListener
     queue: AverageQueue
-    tf_object_to_april: CoordinateTransform
-    _tf_object_to_base: Optional[CoordinateTransform]
+    _tf_april_to_base: Optional[CoordinateTransform]
+    april_z_offset: float
 
-    def __init__(self, tf_object_to_april: CoordinateTransform):
+    def __init__(self, april_z_offset: float = 0.016):
         self.listener = tf.TransformListener()
         self.queue = AverageQueue(max_size=10)
-        self._tf_object_to_base = None
-        self.tf_object_to_april = tf_object_to_april
+        self._tf_april_to_base = None
+        self.april_z_offset = april_z_offset
         rospy.Timer(rospy.Duration(0.1), self.update_queue)
-        self.pub_object_pose = Publisher("object_pose", PoseStamped, queue_size=1, latch=True)
+        self.pub_april_pose = Publisher("april_pose", PoseStamped, queue_size=1, latch=True)
 
     def reset(self):
         self.queue = AverageQueue(max_size=10)
-        self._tf_object_to_base = None
+        self._tf_april_to_base = None
 
     def get_tf_object_to_base(self, timeout: float = 10.0) -> CoordinateTransform:
-        if self._tf_object_to_base is not None:
-            return self._tf_object_to_base
+        if self._tf_april_to_base is not None:
+            return self._tf_april_to_base
         ts = time.time()
-        while self.get_tf_object_to_base is None:
+        while self._tf_april_to_base is None:
             if time.time() - ts > timeout:
                 raise TimeoutError
             rospy.sleep(0.1)
-        assert self._tf_object_to_base is not None
-        return self._tf_object_to_base
+        assert self._tf_april_to_base is not None
+        return self._tf_april_to_base
 
     @staticmethod
     def xyztheta_to_pose(xyztheta: np.ndarray, target_frame: str) -> PoseStamped:
@@ -107,7 +107,7 @@ class ObjectPoseProvider:
         return pose
 
     def update_queue(self, event) -> None:
-        if self._tf_object_to_base is not None:
+        if self._tf_april_to_base is not None:
             return
         trans: Optional[np.ndarray] = None
         rot: Optional[np.ndarray] = None
@@ -124,6 +124,8 @@ class ObjectPoseProvider:
         # we care only yaw and know that othere angles are 0
         ypr = quaternion2rpy(xyzw2wxyz(rot))[0]
         xyztheta = np.hstack([trans, ypr[0]])
+        xyztheta[2] += self.april_z_offset
+
         self.queue.enqueue((xyztheta, rospy.Time.now()))
 
         self.xyztheta_to_pose(xyztheta, target_frame)
@@ -148,16 +150,15 @@ class ObjectPoseProvider:
         tf_april_to_base = CoordinateTransform.from_ros_pose(
             pose_filtered.pose, "april", "base_footprint"
         )
-        tf_object_to_base = chain_transform(self.tf_object_to_april, tf_april_to_base)
-        self._tf_object_to_base = tf_object_to_base
+        self._tf_april_to_base = tf_april_to_base
 
-        object_pose = tf_object_to_base.to_ros_pose()
+        april_pose = tf_april_to_base.to_ros_pose()
         object_pose_stamped = PoseStamped()
         object_pose_stamped.header.frame_id = "base_footprint"
         object_pose_stamped.header.stamp = rospy.Time.now()
-        object_pose_stamped.pose = object_pose
-        self.pub_object_pose.publish(object_pose_stamped)
-        rospy.loginfo("Published object_pose: {}".format(object_pose))
+        object_pose_stamped.pose = april_pose
+        self.pub_april_pose.publish(object_pose_stamped)
+        rospy.loginfo("Published april: {}".format(april_pose))
 
 
 class PointCloudProvider:
@@ -168,9 +169,20 @@ class PointCloudProvider:
         self.buffer = tf2_ros.Buffer()
         tf2_ros.TransformListener(self.buffer)
         self.sub_pcloud = Subscriber(
-            "/kinect_head/depth_registered/half/throttled/points", PointCloud2, self.callback
+            "/kinect_head/depth_registered/throttled/points", PointCloud2, self.callback
         )
         self._pcloud = None
+
+    def get_point_cloud(self, timeout: float = 10.0) -> np.ndarray:
+        if self._pcloud is not None:
+            return self._pcloud
+        ts = time.time()
+        while self._pcloud is None:
+            if time.time() - ts > timeout:
+                raise TimeoutError
+            rospy.sleep(1.0)
+        assert self._pcloud is not None
+        return self._pcloud
 
     def callback(self, msg: PointCloud2) -> None:
         if self._pcloud is not None:
@@ -199,6 +211,6 @@ class PointCloudProvider:
 if __name__ == "__main__":
     rospy.init_node("tf_listener")
     tf_object_april = CoordinateTransform(np.zeros(3), np.eye(3), "object", "april")
-    provider1 = ObjectPoseProvider(tf_object_april)
+    provider1 = ObjectPoseProvider()
     provider2 = PointCloudProvider()
     rospy.spin()
