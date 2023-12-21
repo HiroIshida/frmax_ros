@@ -94,6 +94,28 @@ class ExecutorBase:  # TODO: move later to task-agonistic module
         self.ri.wait_interpolation()
         rospy.loginfo("finish sending")
 
+    @abstractmethod
+    def get_auto_annotation(self) -> Optional[bool]:
+        # return None if uncertain and need manual annotation
+        pass
+
+    def get_manual_annotation(self) -> Optional[bool]:
+        while True:
+            user_input = input("Add label: Enter 'y' for True or 'n' for False, r for retry")
+            if user_input.lower() == "y":
+                return True
+            elif user_input.lower() == "n":
+                return False
+            elif user_input.lower() == "r":
+                return None
+
+    def get_label(
+        self, planer_traj: "GraspingPlanerTrajectory", error: np.ndarray
+    ) -> Optional[bool]:
+        annot = self.get_auto_annotation()
+        if annot is None:
+            return self.get_manual_annotation()
+
 
 class PathPlanner:
     table: Box
@@ -326,6 +348,15 @@ class MugcupGraspExecutor(ExecutorBase):
         )
         return tf_object_to_april * tf_april_to_base
 
+    def get_auto_annotation(self) -> Optional[bool]:
+        gripper_pos = self.ri.gripper_states["larm"].process_value
+        if gripper_pos > 0.004:
+            return True
+        elif gripper_pos < 0.002:
+            return False
+        else:
+            return None
+
     def rollout(self, planer_traj: GraspingPlanerTrajectory, error: np.ndarray) -> Optional[bool]:
         tf_object_to_base = self.get_tf_object_to_base()
         tf_ef_to_base_seq = planer_traj.instantiate(tf_object_to_base, error)
@@ -349,7 +380,7 @@ class MugcupGraspExecutor(ExecutorBase):
             return None  # None means we cannot evaluate the
 
         # now execute reaching and grasping
-        times_reaching = [0.3] * 8 + [0.6] * 2
+        times_reaching = [0.3] * 7 + [0.6] * 2 + [1.0]
         q_traj_reaching = q_traj_reaching.resample(10).numpy()
         self.execute(q_traj_reaching, times_reaching, "larm")
 
@@ -378,14 +409,29 @@ class MugcupGraspExecutor(ExecutorBase):
             q = get_robot_state(self.pr2, joint_names)
             q_list.append(q)
         q_traj_grasping = np.array(q_list)
+        set_robot_state(self.pr2, joint_names, q_traj_grasping[-1])
 
         times_grasping = [0.5] * len(q_traj_grasping)
         self.execute(q_traj_grasping, times_grasping, "larm")
+        self.ri.move_gripper("larm", 0.0)
+
+        # shake forth and back
+        av_now = self.pr2.angle_vector()
+        self.pr2.larm.move_end_pos([0.03, 0.0, 0.0])
+        self.ri.angle_vector(self.pr2.angle_vector(), time_scale=1.0, time=1.0)
+        self.ri.wait_interpolation()
+        self.ri.angle_vector(av_now, time_scale=1.0, time=1.0)
+        self.ri.wait_interpolation()
+        time.sleep(0.5)
+        annot = self.get_auto_annotation()
+        if annot is None:
+            return None  # retry
+        self.ri.move_gripper("larm", self.pregrasp_gripper_pos)
 
         # back to initial pose
         self.execute(q_traj_grasping[::-1], [0.5] * len(q_traj_grasping), "larm")
         self.execute(q_traj_reaching[::-1], times_reaching[::-1], "larm")
-        return True
+        return annot
 
 
 if __name__ == "__main__":
