@@ -287,8 +287,7 @@ class YellowTapeOffsetProvider:
         z_means = [np.mean(cluster) for cluster in clusters]
         highest_cluster_idx = np.argmax(z_means)
         if highest_cluster_idx != largest_cluster_idx:
-            rospy.logerr("The highest cluster is not the largest one")
-            return
+            rospy.logwarn("The highest cluster is not the largest one")
 
         mean = np.mean(points_clustered, axis=0)
         co_from_cloud = Coordinates(pos=mean, rot=co_actual.worldrot())

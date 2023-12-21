@@ -1,3 +1,4 @@
+import time
 from abc import abstractmethod
 from pathlib import Path
 from typing import ClassVar, List, Literal, Optional, Tuple, Union
@@ -33,24 +34,29 @@ from skrobot.viewers import TrimeshSceneViewer
 from tinyfk import BaseType, RotationType
 from utils import CoordinateTransform
 
-from frmax_ros.node import ObjectPoseProvider
+from frmax_ros.node import ObjectPoseProvider, YellowTapeOffsetProvider
 from frmax_ros.utils import CoordinateTransform
 
 
 class ExecutorBase:  # TODO: move later to task-agonistic module
     pose_provider: ObjectPoseProvider
+    offset_prover: YellowTapeOffsetProvider
     pr2: PR2
     ri: PR2ROSRobotInterface
     pub_grasp_path: Publisher
+    viewer: TrimeshSceneViewer
 
     def __init__(self):
-        rospy.init_node("robot_interface", disable_signals=True, anonymous=True)
+        # rospy.init_node("robot_interface", disable_signals=True, anonymous=True)
         self.pr2 = PR2()
-        self._confine_infinite_rotation(self.pr2, ["caster"])
         self.ri = PR2ROSRobotInterface(self.pr2)
+        self._confine_infinite_rotation(self.pr2, ["caster"])
         self.initialize_robot()
         self.pub_grasp_path = rospy.Publisher("/grasp_path", RosPath, queue_size=1, latch=True)
         self.pose_provider = ObjectPoseProvider()
+        self.offset_prover = YellowTapeOffsetProvider()
+        self.viewer = TrimeshSceneViewer()
+        self.viewer.add(self.pr2)
 
     @staticmethod
     def _confine_infinite_rotation(pr2: PR2, filter_words: List[str]) -> None:
@@ -63,7 +69,6 @@ class ExecutorBase:  # TODO: move later to task-agonistic module
                 if np.isinf(joint.min_angle):
                     joint.min_angle = -2 * np.pi
                     rospy.loginfo(f"clamp min angle of {joint.name} from -inf to {joint.min_angle}")
-                    print("clamp min angle")
                 if np.isinf(joint.max_angle):
                     joint.max_angle = +2 * np.pi
                     rospy.loginfo(f"clamp max angle of {joint.name} from +inf to {joint.max_angle}")
@@ -80,18 +85,11 @@ class ExecutorBase:  # TODO: move later to task-agonistic module
         conf = PR2Config(control_arm=arm)
         joint_names = conf.get_control_joint_names()
         av_list = []
-        q_prev = q_traj[0]
         for q in q_traj:
             set_robot_state(self.pr2, joint_names, q)
             av_list.append(self.pr2.angle_vector())
-            q_diff = q - q_prev
-            is_huge_diff = np.any(np.abs(q_diff) > np.pi)
-            if is_huge_diff:
-                rospy.logerr("huge diff")
-                assert False
-            q_prev = q
 
-        rospy.loginfo("follow trajectory")
+        rospy.loginfo("executing angle vector")
         self.ri.angle_vector_sequence(av_list, times=times, time_scale=1.0)
         self.ri.wait_interpolation()
         rospy.loginfo("finish sending")
@@ -233,8 +231,8 @@ class GraspingPlanerTrajectory:
     def __init__(self, param: np.ndarray):
         assert param.shape == (3 * 6 + 3,)
         n_split = 100
-        start = np.array([-0.06, -0.04, 0.0])
-        goal = np.array([-0.0, -0.04, 0.0])
+        start = np.array([-0.06, -0.045, 0.0])
+        goal = np.array([-0.005, -0.045, 0.0])
         diff_step = (goal - start) / (n_split - 1)
         traj_default = np.array([start + diff_step * i for i in range(n_split)])
         n_weights_per_dim = 6
@@ -335,6 +333,8 @@ class MugcupGraspExecutor(ExecutorBase):
         self.pub_grasp_path.publish(path_msg)
         rospy.loginfo("Published grasp path")
 
+        joint_names = PR2Config(control_arm="larm").get_control_joint_names()
+
         # if start position is in collision, consider execution fails
         co_init = tf_ef_to_base_seq[0].to_skrobot_coords()
         co_object = tf_object_to_base.to_skrobot_coords()
@@ -348,11 +348,25 @@ class MugcupGraspExecutor(ExecutorBase):
             rospy.loginfo("Failed to plan reaching")
             return None  # None means we cannot evaluate the
 
-        # plan grasp trajectory
-        joint_names = PR2Config(control_arm="larm").get_control_joint_names()
+        # now execute reaching and grasping
+        times_reaching = [0.3] * 8 + [0.6] * 2
+        q_traj_reaching = q_traj_reaching.resample(10).numpy()
+        self.execute(q_traj_reaching, times_reaching, "larm")
+
+        # calibrate
+        self.offset_prover.reset()
+        time.sleep(2.0)
+        tf_efcalib_to_ef = self.offset_prover.get_cloudtape_to_tape().inverse()
+        tf_efcalib_to_ef.src = "efcalib"
+        tf_efcalib_to_ef.dest = "ef"
+        tf_efcalib_to_base_seq = [
+            tf_efcalib_to_ef * tf_ef_to_base for tf_ef_to_base in tf_ef_to_base_seq
+        ]
+
+        # plan grasping using the calibrated pose
         set_robot_state(self.pr2, joint_names, q_traj_reaching[-1])
         q_list = []
-        for tf_ef_to_base in tf_ef_to_base_seq:
+        for tf_ef_to_base in tf_efcalib_to_base_seq:
             res = self.pr2.larm.inverse_kinematics(
                 tf_ef_to_base.to_skrobot_coords(),
                 link_list=self.pr2.larm.link_list,
@@ -365,15 +379,12 @@ class MugcupGraspExecutor(ExecutorBase):
             q_list.append(q)
         q_traj_grasping = np.array(q_list)
 
-        # now execute reaching and grasping
-        times_reaching = [0.3] * 20
-        self.execute(q_traj_reaching.resample(20).numpy(), times_reaching, "larm")
         times_grasping = [0.5] * len(q_traj_grasping)
         self.execute(q_traj_grasping, times_grasping, "larm")
 
         # back to initial pose
-        self.execute(q_traj_grasping[::-1], [1.0] * len(q_traj_grasping), "larm")
-        # self.execute(q_traj_reaching[::-1].resample(20).numpy(), times_reaching, "larm")
+        self.execute(q_traj_grasping[::-1], [0.5] * len(q_traj_grasping), "larm")
+        self.execute(q_traj_reaching[::-1], times_reaching[::-1], "larm")
         return True
 
 
