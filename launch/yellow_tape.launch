@@ -1,0 +1,48 @@
+<launch>
+  <arg name="input_cloud" default="/remote/tf_transform/output"/>
+
+  <group ns="yellow_tape">
+    <node name="attension_clipper" pkg="nodelet" type="nodelet"
+      args="standalone jsk_pcl/AttentionClipper"
+      output="screen">
+      <remap from="~input/points" to="$(arg input_cloud)"/>
+      <rosparam>
+        use_multiple_attention: false
+        dimension_x: 0.08
+        dimension_y: 0.08
+        dimension_z: 0.08
+        frame_id: l_gripper_l_finger_link
+        initial_pos: [0.01, 0.05, 0.0]
+      </rosparam>
+    </node>
+
+    <node name="ExtractIndices" pkg="nodelet" type="nodelet"
+      args="standalone jsk_pcl/ExtractIndices"
+      output="screen">
+      <remap from="~input" to="$(arg input_cloud)"/>
+      <remap from="~indices" to="attension_clipper/output/point_indices"/>
+      <rosparam>
+        keep_organized: true
+      </rosparam>
+    </node>
+
+    <node name="hsi_filter" pkg="nodelet" type="nodelet"
+      args="standalone jsk_pcl/HSIColorFilter" 
+      output="screen">
+    <remap from="~input" to="ExtractIndices/output"/>
+      <rosparam>
+        use_indices: false
+        keep_organized: false
+      </rosparam>
+      <param name="h_limit_max" value="122" />
+      <param name="h_limit_min" value="-67" />
+      <param name="s_limit_max" value="255" />
+      <param name="s_limit_min" value="0" />
+      <param name="i_limit_max" value="255" />
+      <param name="i_limit_min" value="0" />
+      <!--param name="i_limit_max" value="255" /-->
+      <!--param name="i_limit_min" value="146" /-->
+    </node>
+
+  </group>
+</launch>
