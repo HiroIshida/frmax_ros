@@ -147,9 +147,7 @@ class ObjectPoseProvider:
 
         xyztheta_filtered = self.queue.get_average()
         pose_filtered = self.xyztheta_to_pose(xyztheta_filtered, target_frame)
-        tf_april_to_base = CoordinateTransform.from_ros_pose(
-            pose_filtered.pose, "april", "base_footprint"
-        )
+        tf_april_to_base = CoordinateTransform.from_ros_pose(pose_filtered.pose, "april", "base")
         self._tf_april_to_base = tf_april_to_base
 
         april_pose = tf_april_to_base.to_ros_pose()
