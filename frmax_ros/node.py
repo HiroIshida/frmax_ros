@@ -1,6 +1,7 @@
 import time
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
+import message_filters
 import numpy as np
 import rospy
 import sensor_msgs.point_cloud2 as pc2
@@ -8,14 +9,23 @@ import tf
 import tf2_ros
 import tf2_sensor_msgs
 from geometry_msgs.msg import PoseStamped
+from ros_numpy.point_cloud2 import get_xyz_points, pointcloud2_to_array
 from rospy import Publisher, Subscriber
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import JointState, PointCloud2
+from sklearn.cluster import DBSCAN
+from skrobot.coordinates import Coordinates
 from skrobot.coordinates.math import (
     quaternion2rpy,
     rpy2quaternion,
     wxyz2xyzw,
     xyzw2wxyz,
 )
+from skrobot.interfaces.ros import PR2ROSRobotInterface
+from skrobot.model.link import Link
+from skrobot.model.primitives import Axis
+from skrobot.models.pr2 import PR2
+from skrobot.viewers import TrimeshSceneViewer
+from trimesh import PointCloud
 from typing_extensions import Optional
 
 from frmax_ros.utils import CoordinateTransform
@@ -206,9 +216,108 @@ class PointCloudProvider:
         rospy.loginfo("PointCloud is received and stored")
 
 
+class YellowTapeOffsetProvider:
+    pr2: PR2
+    ri: PR2ROSRobotInterface
+    gripper_link: Link
+    viewer: Optional[TrimeshSceneViewer]
+    visualize: bool
+    method: str
+    _tf_cloudtape_to_tape: Optional[CoordinateTransform]
+
+    def __init__(self, visualize: bool = False, method: str = "naive"):
+        self.pr2 = PR2()
+        sub_pcloud = message_filters.Subscriber("/yellow_tape/hsi_filter/output", PointCloud2)
+        sub_joint_states = message_filters.Subscriber("/joint_states", JointState)
+        message_filter = message_filters.ApproximateTimeSynchronizer(
+            [sub_pcloud, sub_joint_states], 100, 0.3
+        )
+        message_filter.registerCallback(self.callback_pointcloud_colored)
+        self.gripper_link = self.pr2.l_gripper_l_finger_link
+        self.viewer = None
+        self.visualize = visualize
+        self.method = method
+        self._tf_cloudtape_to_tape = None
+
+    def get_cloudtape_to_tape(self, timeout: float = 5.0) -> CoordinateTransform:
+        if self._tf_cloudtape_to_tape is not None:
+            return self._tf_cloudtape_to_tape
+
+        ts = time.time()
+        while self._tf_cloudtape_to_tape is None:
+            if time.time() - ts > timeout:
+                raise TimeoutError("Timeout waiting for tf_cloudtape_to_tape")
+            rospy.sleep(0.05)
+            rospy.loginfo("Waiting for tf_cloudtape_to_tape")
+        return self._tf_cloudtape_to_tape
+
+    def reset(self) -> None:
+        self._tf_cloudtape_to_tape = None
+        rospy.loginfo("tf_cloudtape_to_tape is reset")
+
+    def callback_pointcloud_colored(
+        self, pcloud_msg: PointCloud2, joint_state_msg: JointState
+    ) -> None:
+        if self._tf_cloudtape_to_tape is not None:
+            return
+        table = {name: angle for name, angle in zip(joint_state_msg.name, joint_state_msg.position)}
+        [self.pr2.__dict__[name].joint_angle(angle) for name, angle in table.items()]
+        co_actual = self.gripper_link.copy_worldcoords()
+        co_actual.translate([0.02, 0.045, 0.0])
+        co_actual.rotate(-np.pi * 0.06, "z")
+
+        time.time()
+        arr = pointcloud2_to_array(pcloud_msg).flatten()
+        xyz = get_xyz_points(arr, remove_nans=True)  # nan filter by myself
+        if len(xyz) == 0:
+            rospy.logwarn("No yellow point cloud found")
+            return
+
+        # clustering
+        dbscan = DBSCAN(eps=0.005, min_samples=3)
+        clusters = dbscan.fit_predict(xyz)
+        n_label = np.max(clusters) + 1
+        cluster_sizes = [np.sum(clusters == i) for i in range(n_label)]
+        largest_cluster_idx = np.argmax(cluster_sizes)
+        points_clustered = xyz[clusters == largest_cluster_idx]
+
+        # if multiple clusters are found, the largest one corresponds to the tape
+        # should have highest z value
+        clusters = [xyz[clusters == i] for i in range(n_label)]
+        z_means = [np.mean(cluster) for cluster in clusters]
+        highest_cluster_idx = np.argmax(z_means)
+        if highest_cluster_idx != largest_cluster_idx:
+            rospy.logerr("The highest cluster is not the largest one")
+            return
+
+        mean = np.mean(points_clustered, axis=0)
+        co_from_cloud = Coordinates(pos=mean, rot=co_actual.worldrot())
+
+        tf_cloudtape_to_base = CoordinateTransform.from_skrobot_coords(
+            co_from_cloud, "cloud_tape", "base"
+        )
+        tf_tape_to_base = CoordinateTransform.from_skrobot_coords(co_actual, "tape", "base")
+        self._tf_cloudtape_to_tape = tf_cloudtape_to_base * tf_tape_to_base.inverse()
+        rospy.loginfo(f"tf_cloudtape_to_tape: {self._tf_cloudtape_to_tape}")
+
+        if self.viewer is None and self.visualize:
+            self.viewer = TrimeshSceneViewer()
+            self.viewer.add(self.pr2)
+            link = Link()
+            axis_from_cloud = Axis.from_coords(co_from_cloud, axis_radius=0.002)
+            axis = Axis.from_coords(co_actual, axis_radius=0.002)
+            self.viewer.add(axis)
+            self.viewer.add(axis_from_cloud)
+            link._visual_mesh = PointCloud(points_clustered)
+            self.plink = link
+            self.viewer.add(link)
+            self.viewer.show()
+
+
 if __name__ == "__main__":
     rospy.init_node("tf_listener")
     tf_object_april = CoordinateTransform(np.zeros(3), np.eye(3), "object", "april")
     provider1 = ObjectPoseProvider()
     provider2 = PointCloudProvider()
+    provider3 = YellowTapeOffsetProvider(visualize=True)
     rospy.spin()
