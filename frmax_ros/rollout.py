@@ -2,6 +2,7 @@ import _thread
 import re
 import subprocess
 import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Literal, Optional
@@ -96,7 +97,7 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
     pub_grasp_path: Publisher
     scene: PlanningScene
 
-    def __init__(self, target_object: MeshLink, use_obinata_keyboard: bool = True):
+    def __init__(self, target_object: MeshLink, use_obinata_keyboard: bool = False):
         # rospy.init_node("robot_interface", disable_signals=True, anonymous=True)
         self.pr2 = PR2()
         self.ri = PR2ROSRobotInterface(self.pr2)
@@ -178,7 +179,7 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
                 return label
             except RolloutAbortedException as e:
                 rospy.logwarn(e.message)
-                speak("recovery required")
+                speak(f"recovery required. reason is {e.message}")
                 self.recover()
 
     def send_command_to_real_robot(
@@ -234,13 +235,15 @@ class AutomaticTrainerBase(ABC):
         sampler_config: DGSamplerConfig,
         n_init_sample: int = 10,
     ):
+        speak("start trining")
         self.i_episode_next = 0
         rollout_executor = self.get_rollout_executor()
         dof = rollout_executor.get_policy_dof()
         param_init = np.zeros(dof)
-        X = []
-        Y = []
-        for _ in range(n_init_sample):
+        X = [np.hstack([param_init, np.zeros(ls_error.size)])]
+        Y = [True]
+        for i in range(n_init_sample):
+            speak(f"initial sampling number {i}")
             e = self.sample_situation()
             label = rollout_executor.robust_rollout(param_init, e)
             X.append(np.hstack([param_init, e]))
@@ -278,8 +281,11 @@ class AutomaticTrainerBase(ABC):
         speak(f"start episode {self.i_episode_next}")
         x = self.sampler.ask()
         assert isinstance(x, np.ndarray)
+        speak(f"determined next data point")
         param_dof = self.rollout_executor.get_policy_dof()
         param, error = x[:param_dof], x[param_dof:]
         label = self.rollout_executor.robust_rollout(param, error)
+        speak(f"label {label}")
+        time.sleep(1.0)
         self.sampler.tell(x, label)
         self.i_episode_next += 1

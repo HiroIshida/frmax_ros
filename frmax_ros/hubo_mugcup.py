@@ -316,13 +316,13 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
         try:
             tf_object_to_base = self.get_tf_object_to_base()
         except TimeoutError:
-            reason = "failed to get object pose. timeout."
+            reason = "failed to get object pose"
             raise RolloutAbortedException(reason)
         self.scene.update(tf_object_to_base.to_skrobot_coords())
 
         x_pos, y_pos = tf_object_to_base.trans[:2]
-        if x_pos > 0.6 or y_pos > 0.15:
-            reason = "invalid object position, required to be fixed"
+        if x_pos > 0.6 or y_pos > 0.2:
+            reason = "invalid object position"
             raise RolloutAbortedException(reason)
 
         tf_ef_to_base_seq = planer_traj.instantiate(tf_object_to_base, error)
@@ -385,9 +385,9 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
         self.send_command_to_real_robot(q_traj_grasping, times_grasping, "larm")
         self.ri.move_gripper("larm", 0.0, effort=100)
 
-        # shake forth and back
+        # shake back and force
         av_now = self.pr2.angle_vector()
-        self.pr2.larm.move_end_pos([0.03, 0.0, 0.0])
+        self.pr2.larm.move_end_pos([-0.03, 0.0, 0.0])
         self.ri.angle_vector(self.pr2.angle_vector(), time_scale=1.0, time=1.0)
         self.ri.wait_interpolation()
         self.ri.angle_vector(av_now, time_scale=1.0, time=1.0)
