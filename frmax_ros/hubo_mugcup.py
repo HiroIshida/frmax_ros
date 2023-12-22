@@ -100,7 +100,7 @@ class PlanningScene:
         self.colvis.update(self.pr2)
 
 
-class ExecutorBase:  # TODO: move later to task-agonistic module
+class RolloutExecutor:  # TODO: move later to task-agonistic module
     pose_provider: ObjectPoseProvider
     offset_prover: YellowTapeOffsetProvider
     pr2: PR2
@@ -174,7 +174,9 @@ class ExecutorBase:  # TODO: move later to task-agonistic module
     def rollout(self, planer_traj: "GraspingPlanerTrajectory", error: np.ndarray) -> Optional[bool]:
         pass
 
-    def execute(self, q_traj: List[np.ndarray], times: List[float], arm: Literal["larm", "rarm"]):
+    def send_command_to_real_robot(
+        self, q_traj: List[np.ndarray], times: List[float], arm: Literal["larm", "rarm"]
+    ):
         conf = PR2Config(control_arm=arm)
         joint_names = conf.get_control_joint_names()
         av_list = []
@@ -425,7 +427,7 @@ class GraspingPlanerTrajectory:
         return path_msg
 
 
-class MugcupGraspExecutor(ExecutorBase):
+class MugcupGraspRolloutExecutor(RolloutExecutor):
     path_planner: PathPlanner
     tf_object_to_april: CoordinateTransform
     pregrasp_gripper_pos: ClassVar[float] = 0.03
@@ -497,7 +499,7 @@ class MugcupGraspExecutor(ExecutorBase):
         # now execute reaching and grasping
         times_reaching = [0.3] * 7 + [0.6] * 2 + [1.0]
         q_traj_reaching = q_traj_reaching.resample(10).numpy()
-        self.execute(q_traj_reaching, times_reaching, "larm")
+        self.send_command_to_real_robot(q_traj_reaching, times_reaching, "larm")
 
         # calibrate
         self.offset_prover.reset()
@@ -530,7 +532,7 @@ class MugcupGraspExecutor(ExecutorBase):
         set_robot_state(self.pr2, joint_names, q_traj_grasping[-1])
 
         times_grasping = [0.5] * len(q_traj_grasping)
-        self.execute(q_traj_grasping, times_grasping, "larm")
+        self.send_command_to_real_robot(q_traj_grasping, times_grasping, "larm")
         self.ri.move_gripper("larm", 0.0, effort=100)
 
         # shake forth and back
@@ -547,15 +549,13 @@ class MugcupGraspExecutor(ExecutorBase):
         self.ri.move_gripper("larm", self.pregrasp_gripper_pos)
 
         # back to initial pose
-        self.execute(q_traj_grasping[::-1], [0.5] * len(q_traj_grasping), "larm")
-        self.execute(q_traj_reaching[::-1], times_reaching[::-1], "larm")
+        self.send_command_to_real_robot(q_traj_grasping[::-1], [0.5] * len(q_traj_grasping), "larm")
+        self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
         return annot
 
 
 if __name__ == "__main__":
-    e = MugcupGraspExecutor()
+    e = MugcupGraspRolloutExecutor()
     traj = GraspingPlanerTrajectory(np.zeros(3 * 6 + 3))
     e.rollout(traj, np.zeros(3))
-    # target = np.array([ 0.43684961, -0.06240444, -1.5213599 ])
-    # e.recover(target)
     rospy.spin()
