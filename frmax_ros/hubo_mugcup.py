@@ -6,6 +6,7 @@ import numpy as np
 import rospkg
 import rospy
 import trimesh
+from frmax2.core import DGSamplerConfig
 from geometry_msgs.msg import PoseStamped
 from movement_primitives.dmp import DMP
 from nav_msgs.msg import Path as RosPath
@@ -29,7 +30,12 @@ from skrobot.sdf import UnionSDF
 from tinyfk import BaseType, RotationType
 from utils import CoordinateTransform
 
-from frmax_ros.rollout import PlanningScene, RolloutExecutor
+from frmax_ros.rollout import (
+    AutomaticTrainerBase,
+    PlanningScene,
+    RolloutAbortedException,
+    RolloutExecutorBase,
+)
 from frmax_ros.utils import CoordinateTransform
 
 
@@ -176,6 +182,7 @@ class PathPlanner:
 
 class GraspingPlanerTrajectory:
     seq_tf_ef_to_nominal: List[CoordinateTransform]
+    is_valid: bool
     pregrasp_gripper_pos: ClassVar[float] = 0.03
 
     def __init__(self, param: np.ndarray):
@@ -202,6 +209,13 @@ class GraspingPlanerTrajectory:
         goal_param = param[-n_goal_dim:] * goal_position_scaling
         dmp.goal_y += goal_param
         _, planer_traj = dmp.open_loop()
+
+        is_valid = True
+        if np.any(np.abs(planer_traj[:, 2]) > np.deg2rad(45.0)):
+            is_valid = False
+        if np.abs(planer_traj[-1, 0] - planer_traj[0, 0]) > 0.1:
+            is_valid = False
+        self.is_valid = is_valid
 
         height = 0.08
         tf_seq = []
@@ -248,7 +262,7 @@ class GraspingPlanerTrajectory:
         return path_msg
 
 
-class MugcupGraspRolloutExecutor(RolloutExecutor):
+class MugcupGraspRolloutExecutor(RolloutExecutorBase):
     path_planner: PathPlanner
     tf_object_to_april: CoordinateTransform
     pregrasp_gripper_pos: ClassVar[float] = 0.03
@@ -293,9 +307,23 @@ class MugcupGraspRolloutExecutor(RolloutExecutor):
         else:
             return None
 
-    def rollout(self, planer_traj: GraspingPlanerTrajectory, error: np.ndarray) -> Optional[bool]:
-        tf_object_to_base = self.get_tf_object_to_base()
-        rospy.loginfo(f"pose_3d: {tf_object_to_base.to_pose3d()}")
+    def get_policy_dof(self) -> int:
+        return 21
+
+    def rollout(self, param: np.ndarray, error: np.ndarray) -> bool:
+        assert param.shape == (self.get_policy_dof(),)
+        planer_traj = GraspingPlanerTrajectory(param)
+        try:
+            tf_object_to_base = self.get_tf_object_to_base()
+        except TimeoutError:
+            reason = "failed to get object pose. timeout."
+            raise RolloutAbortedException(reason)
+        self.scene.update(tf_object_to_base.to_skrobot_coords())
+
+        x_pos, y_pos = tf_object_to_base.trans[:2]
+        if x_pos > 0.6 or y_pos > 0.15:
+            reason = "invalid object position, required to be fixed"
+            raise RolloutAbortedException(reason)
 
         tf_ef_to_base_seq = planer_traj.instantiate(tf_object_to_base, error)
         path_msg = planer_traj.get_path_msg(tf_object_to_base, error)
@@ -314,8 +342,8 @@ class MugcupGraspRolloutExecutor(RolloutExecutor):
         # plan reaching
         q_traj_reaching = self.path_planner.plan_path(co_init, "larm", co_object=co_object)
         if q_traj_reaching is None:
-            rospy.loginfo("Failed to plan reaching")
-            return None  # None means we cannot evaluate the
+            reason = "Failed to plan reaching"
+            raise RolloutAbortedException(reason)
 
         # now execute reaching and grasping
         times_reaching = [0.3] * 7 + [0.6] * 2 + [1.0]
@@ -345,8 +373,9 @@ class MugcupGraspRolloutExecutor(RolloutExecutor):
                 move_target=self.pr2.larm_end_coords,
             )
             if isinstance(res, bool) and res == False:
-                rospy.loginfo("Failed to plan IK")
-                return None
+                reason = "IK failed"
+                raise RolloutAbortedException(reason)
+
             q = get_robot_state(self.pr2, joint_names)
             q_list.append(q)
         q_traj_grasping = np.array(q_list)
@@ -366,7 +395,8 @@ class MugcupGraspRolloutExecutor(RolloutExecutor):
         time.sleep(0.5)
         annot = self.get_auto_annotation()
         if annot is None:
-            return None  # retry
+            reason = "ambiguous annotation"
+            raise RolloutAbortedException(reason)
         self.ri.move_gripper("larm", self.pregrasp_gripper_pos)
 
         # back to initial pose
@@ -375,8 +405,43 @@ class MugcupGraspRolloutExecutor(RolloutExecutor):
         return annot
 
 
+class MugcupGraspTrainer(AutomaticTrainerBase):
+    b_min: np.ndarray
+    b_max: np.ndarray
+
+    def __init__(self):
+        ls_param = np.ones(21)
+        ls_err = np.array([0.005, 0.005, np.deg2rad(5.0)])
+        self.b_min = np.array([-0.03, -0.03, -np.pi * 0.2])
+        self.b_max = np.array([0.03, 0.03, np.pi * 0.2])
+        config = DGSamplerConfig(
+            param_ls_reduction_rate=0.999,
+            n_mc_param_search=30,
+            c_svm=10000,
+            integration_method="mc",
+            n_mc_integral=1000,
+            r_exploration=0.5,
+            learning_rate=1.0,
+        )
+        super().__init__(ls_param, ls_err, config, n_init_sample=10)
+
+    @staticmethod
+    def get_rollout_executor() -> RolloutExecutorBase:
+        return MugcupGraspRolloutExecutor()
+
+    def sample_situation(self) -> np.ndarray:
+        return np.random.uniform(self.b_min, self.b_max)
+
+    @staticmethod
+    def is_valid_param(param: np.ndarray) -> bool:
+        traj = GraspingPlanerTrajectory(param)
+        return traj.is_valid
+
+
 if __name__ == "__main__":
-    e = MugcupGraspRolloutExecutor()
-    traj = GraspingPlanerTrajectory(np.zeros(3 * 6 + 3))
-    e.rollout(traj, np.zeros(3))
-    rospy.spin()
+    # e = MugcupGraspRolloutExecutor()
+    # e.rollout(np.zeros(21), np.zeros(3))
+    # rospy.spin()
+
+    trainer = MugcupGraspTrainer()
+    trainer.next()
