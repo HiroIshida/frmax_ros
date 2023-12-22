@@ -5,9 +5,12 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Literal, Optional
 
+import dill
 import numpy as np
+import rospkg
 import rospy
 from evdev import InputDevice, categorize, ecodes
 from frmax2.core import CompositeMetric, DGSamplerConfig, DistributionGuidedSampler
@@ -23,6 +26,7 @@ from skrobot.model.primitives import Axis, Box, MeshLink, PointCloudLink
 from skrobot.models.pr2 import PR2
 from skrobot.sdf import GridSDF
 from skrobot.viewers import TrimeshSceneViewer
+from sound_play.libsoundplay import SoundClient
 
 from frmax_ros.node import ObjectPoseProvider, YellowTapeOffsetProvider
 
@@ -30,6 +34,11 @@ from frmax_ros.node import ObjectPoseProvider, YellowTapeOffsetProvider
 def speak(message: str) -> None:
     rospy.loginfo(message)
     subprocess.call('echo "{}" | festival --tts'.format(message), shell=True)
+    sound_client = SoundClient()
+    try:
+        sound_client.say(message)
+    except:
+        print("sound client error")
 
 
 class PlanningScene:
@@ -43,7 +52,9 @@ class PlanningScene:
     def __init__(self, pr2: PR2, target_object: MeshLink, visualize: bool = True):
         self.target_object = target_object
         h = 0.72
-        table = Box(extents=[0.5, 0.9, h], with_sdf=True)
+        table = Box(
+            extents=[0.7, 1.1, h], with_sdf=True
+        )  # x and y are bit larger than the actual table
         table.translate([0.5, 0, 0.5 * h])
         table.visual_mesh.visual.face_colors = [165, 42, 42, 255]
         self.table = table
@@ -224,6 +235,7 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
 
 
 class AutomaticTrainerBase(ABC):
+    project_path: Path
     i_episode_next: int
     rollout_executor: RolloutExecutorBase
     sampler: DistributionGuidedSampler
@@ -233,8 +245,20 @@ class AutomaticTrainerBase(ABC):
         ls_param: np.ndarray,
         ls_error: np.ndarray,
         sampler_config: DGSamplerConfig,
+        project_name: str,
         n_init_sample: int = 10,
     ):
+
+        project_path = self.get_project_path(project_name)
+
+        if len(list(project_path.iterdir())) > 0:
+            while True:
+                user_input = input("push y to remove all cache files and proceed")
+                if user_input.lower() == "y":
+                    break
+            for p in project_path.iterdir():
+                p.unlink()
+
         speak("start trining")
         self.i_episode_next = 0
         rollout_executor = self.get_rollout_executor()
@@ -263,6 +287,17 @@ class AutomaticTrainerBase(ABC):
             situation_sampler=self.sample_situation,
             is_valid_param=self.is_valid_param,
         )
+        self.project_path = project_path
+
+    @staticmethod
+    def get_project_path(project_name: str) -> Path:
+        rospack = rospkg.RosPack()
+        pkg_path = rospack.get_path("frmax_ros")
+        data_path = Path(pkg_path) / "data"
+        assert data_path.exists()
+        project_path = data_path / project_name
+        project_path.mkdir(exist_ok=True)
+        return project_path
 
     @staticmethod
     @abstractmethod
@@ -277,6 +312,29 @@ class AutomaticTrainerBase(ABC):
     def is_valid_param(self, param: np.ndarray) -> bool:
         pass
 
+    def save(self):
+        data_path = self.project_path / f"trainer_cache-{self.i_episode_next}.pkl"
+        with open(data_path, "wb") as f:
+            dill.dump(self, f)
+        rospy.loginfo(f"save trainer to {data_path}")
+
+    @classmethod
+    def load(cls, project_name: str) -> "AutomaticTrainerBase":
+        project_path = cls.get_project_path(project_name)
+        # load the one with largest episode number
+        max_episode = -1
+        max_episode_path = None
+        for p in project_path.iterdir():
+            if p.name.startswith("trainer_cache-"):
+                episode = int(p.name.split("-")[-1].split(".")[0])
+                if episode > max_episode:
+                    max_episode = episode
+                    max_episode_path = p
+        assert max_episode_path is not None, "no cache file found"
+        rospy.loginfo(f"load trainer from {max_episode_path}")
+        with open(max_episode_path, "rb") as f:
+            return dill.load(f)
+
     def next(self) -> None:
         speak(f"start episode {self.i_episode_next}")
         x = self.sampler.ask()
@@ -289,3 +347,4 @@ class AutomaticTrainerBase(ABC):
         time.sleep(1.0)
         self.sampler.tell(x, label)
         self.i_episode_next += 1
+        self.save()

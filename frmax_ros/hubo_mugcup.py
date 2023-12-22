@@ -423,7 +423,7 @@ class MugcupGraspTrainer(AutomaticTrainerBase):
             r_exploration=0.5,
             learning_rate=1.0,
         )
-        super().__init__(ls_param, ls_err, config, n_init_sample=10)
+        super().__init__(ls_param, ls_err, config, "mugcup", n_init_sample=10)
 
     @staticmethod
     def get_rollout_executor() -> RolloutExecutorBase:
