@@ -1,3 +1,7 @@
+import _thread
+import re
+import subprocess
+import threading
 import time
 from abc import abstractmethod
 from functools import lru_cache
@@ -8,6 +12,7 @@ import numpy as np
 import rospkg
 import rospy
 import trimesh
+from evdev import InputDevice, categorize, ecodes
 from geometry_msgs.msg import PoseStamped
 from movement_primitives.dmp import DMP
 from nav_msgs.msg import Path as RosPath
@@ -100,7 +105,7 @@ class ExecutorBase:  # TODO: move later to task-agonistic module
     pub_grasp_path: Publisher
     scene: PlanningScene
 
-    def __init__(self, target_object: MeshLink):
+    def __init__(self, target_object: MeshLink, use_obinata_keyboard: bool = True):
         # rospy.init_node("robot_interface", disable_signals=True, anonymous=True)
         self.pr2 = PR2()
         self.ri = PR2ROSRobotInterface(self.pr2)
@@ -110,6 +115,38 @@ class ExecutorBase:  # TODO: move later to task-agonistic module
         self.pose_provider = ObjectPoseProvider()
         self.offset_prover = YellowTapeOffsetProvider()
         self.scene = PlanningScene(self.pr2, target_object)
+        # run monitor in background
+        if use_obinata_keyboard:
+            t = threading.Thread(target=self.monitor_keyboard)
+            t.start()
+
+    @staticmethod
+    def monitor_keyboard():
+        ri = PR2ROSRobotInterface(PR2())
+        command = "ls -l /dev/input/by-id | grep 'usb-SIGMACHIP_USB_Keyboard-event-kbd'"
+
+        try:
+            result = subprocess.check_output(command, shell=True, text=True)
+            device_file = result.split()[-1]
+        except subprocess.CalledProcessError as e:
+            result = "Error occurred: " + str(e)
+            device_file = None
+        match = re.search(r"event(\d+)", device_file)
+        event_number = match.group(1) if match else None
+        device_path = f"/dev/input/event{event_number}"
+        keyboard = InputDevice(device_path)
+        try:
+            for event in keyboard.read_loop():
+                if event.type == ecodes.EV_KEY:
+                    key_event = categorize(event)
+                    if key_event.keystate == key_event.key_down:
+                        print(f"Key pressed: {key_event.keycode}. stop robot")
+                        av_now = ri.angle_vector()
+                        ri.angle_vector(av_now, time_scale=5.0, time=1.0)
+                        _thread.interrupt_main()  # fuck
+
+        except KeyboardInterrupt:
+            print("Stopping keyboard monitoring")
 
     @staticmethod
     def _confine_infinite_rotation(pr2: PR2, filter_words: List[str]) -> None:
