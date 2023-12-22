@@ -9,6 +9,7 @@ from skrobot.coordinates import Coordinates
 from skrobot.coordinates.math import (
     matrix2quaternion,
     quaternion2matrix,
+    rpy_angle,
     wxyz2xyzw,
     xyzw2wxyz,
 )
@@ -51,6 +52,12 @@ class CoordinateTransform:
             return self.rot.dot(vec_src.T).T + self.trans
         else:
             assert False
+
+    def to_pose3d(self) -> np.ndarray:
+        xy = self.trans[:2]
+        yaw = rpy_angle(self.rot)[0][0]
+        pose3d = np.array([xy[0], xy[1], yaw])
+        return pose3d
 
     def inverse(self) -> "CoordinateTransform":
         rot_new = self.rot.T
