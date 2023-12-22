@@ -275,6 +275,9 @@ class YellowTapeOffsetProvider:
         # clustering
         dbscan = DBSCAN(eps=0.005, min_samples=3)
         clusters = dbscan.fit_predict(xyz)
+        if len(clusters) == 0:
+            rospy.logwarn("No yellow point cloud found")
+            return
         n_label = np.max(clusters) + 1
         cluster_sizes = [np.sum(clusters == i) for i in range(n_label)]
         largest_cluster_idx = np.argmax(cluster_sizes)
