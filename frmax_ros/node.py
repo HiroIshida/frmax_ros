@@ -9,7 +9,6 @@ import tf
 import tf2_ros
 import tf2_sensor_msgs
 from geometry_msgs.msg import PoseStamped
-from ros_numpy.point_cloud2 import get_xyz_points, pointcloud2_to_array
 from rospy import Publisher, Subscriber
 from sensor_msgs.msg import JointState, PointCloud2
 from sklearn.cluster import DBSCAN
@@ -267,8 +266,8 @@ class YellowTapeOffsetProvider:
         co_actual.rotate(-np.pi * 0.06, "z")
 
         time.time()
-        arr = pointcloud2_to_array(pcloud_msg).flatten()
-        xyz = get_xyz_points(arr, remove_nans=True)  # nan filter by myself
+        gen = pc2.read_points(pcloud_msg, skip_nans=True, field_names=("x", "y", "z"))
+        xyz = np.array(list(gen))
         if len(xyz) == 0:
             rospy.logwarn("No yellow point cloud found")
             return
