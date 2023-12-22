@@ -1,5 +1,6 @@
 import time
 from abc import abstractmethod
+from functools import lru_cache
 from pathlib import Path
 from typing import ClassVar, List, Literal, Optional, Tuple, Union
 
@@ -24,12 +25,13 @@ from skmp.satisfy import SatisfactionConfig, satisfy_by_optimization_with_budget
 from skmp.solver.interface import Problem
 from skmp.solver.ompl_solver import OMPLSolver, OMPLSolverConfig
 from skmp.trajectory import Trajectory
+from skmp.visualization.collision_visualizer import CollisionSphereVisualizationManager
 from skrobot.coordinates import Coordinates
 from skrobot.interfaces.ros import PR2ROSRobotInterface
 from skrobot.model.joint import RotationalJoint
-from skrobot.model.primitives import Box, MeshLink
+from skrobot.model.primitives import Axis, Box, MeshLink, PointCloudLink
 from skrobot.models.pr2 import PR2
-from skrobot.sdf import UnionSDF
+from skrobot.sdf import GridSDF, UnionSDF
 from skrobot.viewers import TrimeshSceneViewer
 from tinyfk import BaseType, RotationType
 from utils import CoordinateTransform
@@ -38,14 +40,67 @@ from frmax_ros.node import ObjectPoseProvider, YellowTapeOffsetProvider
 from frmax_ros.utils import CoordinateTransform
 
 
+class PlanningScene:
+    table: Box
+    dummy_obstacle: Box
+    target_object: MeshLink
+    pr2: PR2
+    axis: Axis
+    viewer: Optional[TrimeshSceneViewer]
+
+    def __init__(self, pr2: PR2, target_object: MeshLink, visualize: bool = True):
+        self.target_object = target_object
+        h = 0.72
+        table = Box(extents=[0.5, 0.9, h], with_sdf=True)
+        table.translate([0.5, 0, 0.5 * h])
+        table.visual_mesh.visual.face_colors = [165, 42, 42, 255]
+        self.table = table
+
+        dummy_obstacle = Box([0.45, 0.6, 0.03], pos=[0.5, 0.0, 1.2], with_sdf=True)
+        dummy_obstacle.visual_mesh.visual.face_colors = [150, 150, 150, 100]
+        self.dummy_obstacle = dummy_obstacle
+        self.pr2 = pr2
+        self.axis = Axis.from_coords(Coordinates())
+
+        if visualize:
+            self.viewer = TrimeshSceneViewer()
+            colkin = PR2Config().get_collision_kin(whole_body=True)
+            colkin.reflect_skrobot_model(pr2)
+            self.colvis = CollisionSphereVisualizationManager(colkin, self.viewer, None)
+            self.viewer.add(self.axis)
+            self.viewer.add(table)
+            self.viewer.add(dummy_obstacle)
+            self.viewer.add(target_object)
+            self.viewer.add(pr2)
+            self.viewer.show()
+
+    def add_debug_sdf_pointcloud(self) -> None:
+        sdf: GridSDF = self.target_object.sdf
+        points, _ = sdf.surface_points(1000)
+        pcloud = PointCloudLink(points)
+        self.viewer.add(pcloud)
+
+    def update(
+        self, co_object: Optional[Coordinates] = None, co_axis: Optional[Coordinates] = None
+    ):
+        if co_object is not None:
+            self.target_object.newcoords(co_object)
+        if co_axis is not None:
+            self.axis.newcoords(co_axis)
+        if self.viewer is not None:
+            self.viewer.redraw()
+        self.colvis.update(self.pr2)
+
+
 class ExecutorBase:  # TODO: move later to task-agonistic module
     pose_provider: ObjectPoseProvider
     offset_prover: YellowTapeOffsetProvider
     pr2: PR2
     ri: PR2ROSRobotInterface
     pub_grasp_path: Publisher
+    scene: PlanningScene
 
-    def __init__(self):
+    def __init__(self, target_object: MeshLink):
         # rospy.init_node("robot_interface", disable_signals=True, anonymous=True)
         self.pr2 = PR2()
         self.ri = PR2ROSRobotInterface(self.pr2)
@@ -54,6 +109,7 @@ class ExecutorBase:  # TODO: move later to task-agonistic module
         self.pub_grasp_path = rospy.Publisher("/grasp_path", RosPath, queue_size=1, latch=True)
         self.pose_provider = ObjectPoseProvider()
         self.offset_prover = YellowTapeOffsetProvider()
+        self.scene = PlanningScene(self.pr2, target_object)
 
     @staticmethod
     def _confine_infinite_rotation(pr2: PR2, filter_words: List[str]) -> None:
@@ -114,58 +170,19 @@ class ExecutorBase:  # TODO: move later to task-agonistic module
             return self.get_manual_annotation()
 
 
-class PlanningScene:
-    table: Box
-    dummy_obstacle: Box
-    target_object: MeshLink
-    pr2: PR2
-    viewer: Optional[TrimeshSceneViewer]
-
-    def __init__(self, pr2: PR2, visualize: bool = True):
-        rospack = rospkg.RosPack()
-        pkg_path = Path(rospack.get_path("frmax_ros"))
-        mug_model_path = pkg_path / "model" / "hubolab_mug.stl"
-        mesh = trimesh.load_mesh(mug_model_path)
-        mugcup = MeshLink(mesh, with_sdf=True)
-        self.target_object = mugcup
-
-        h = 0.72
-        table = Box(extents=[0.5, 0.9, h], with_sdf=True)
-        table.translate([0.5, 0, 0.5 * h])
-        table.visual_mesh.visual.face_colors = [165, 42, 42, 255]
-        self.table = table
-
-        dummy_obstacle = Box([0.45, 0.6, 0.03], pos=[0.5, 0.0, 1.2], with_sdf=True)
-        dummy_obstacle.visual_mesh.visual.face_colors = [150, 150, 150, 100]
-        self.dummy_obstacle = dummy_obstacle
-        self.pr2 = pr2
-        if visualize:
-            self.viewer = TrimeshSceneViewer()
-            self.viewer.add(table)
-            self.viewer.add(dummy_obstacle)
-            self.viewer.add(mugcup)
-            self.viewer.add(pr2)
-            self.viewer.show()
-
-    def update(self, co_object: Optional[Coordinates] = None):
-        if co_object is not None:
-            self.target_object.newcoords(co_object)
-        if self.viewer is not None:
-            self.viewer.redraw()
-
-
 class PathPlanner:
-    scene: PlanningScene
     pr2: PR2
+    scene: PlanningScene
 
-    def __init__(self, pr2: PR2, visualize: bool = True):
+    def __init__(self, pr2: PR2, scene: PlanningScene, visualize: bool = True):
         self.pr2 = pr2
-        self.scene = PlanningScene(pr2, visualize=visualize)
+        self.scene = scene
 
     def _setup_constraints(
         self,
         target: Union[Coordinates, np.ndarray],
         arm: Literal["larm", "rarm"],
+        *,
         co_object: Optional[Coordinates] = None,
         consider_table: bool = True,
         consider_dummy: bool = True,
@@ -180,6 +197,7 @@ class PathPlanner:
         if consider_table:
             sdfs.append(self.scene.table.sdf)
         if consider_dummy:
+            rospy.loginfo("dummy object is considered")
             sdfs.append(self.scene.dummy_obstacle.sdf)
         if consider_object:
             sdfs.append(self.scene.target_object.sdf)
@@ -233,17 +251,54 @@ class PathPlanner:
         assert ret.success, "as base type is planer, the IK should be always feasible"
         return ineq_const.is_valid(ret.q)
 
+    def solve_ik_skrobot(
+        self,
+        co: Coordinates,
+        arm: Literal["larm", "rarm"],
+        q_seed: np.ndarray,
+        co_object: Optional[Coordinates] = None,
+        consider_table: bool = True,
+        consider_dummy: bool = True,
+        consider_object: bool = True,
+    ) -> Optional[np.ndarray]:
+        eq_const, ineq_const, box_const = self._setup_constraints(
+            co,
+            arm,
+            co_object=co_object,
+            consider_table=consider_table,
+            consider_dummy=consider_dummy,
+            consider_object=consider_object,
+        )
+        arm_robot = self.pr2.rarm if arm == "rarm" else self.pr2.larm
+        move_target = self.pr2.rarm_end_coords if arm == "rarm" else self.pr2.larm_end_coords
+        ret = arm_robot.inverse_kinematics(co, move_target=move_target, seed=q_seed)
+        if isinstance(ret, bool) and ret == False:
+            rospy.loginfo("callision agnonistic IK failed")
+            return None
+        assert isinstance(ret, np.ndarray)
+        print(ineq_const.evaluate_single(ret, with_jacobian=False))
+        if not ineq_const.is_valid(ret):
+            rospy.loginfo("solved Ik but in collision")
+            return None
+        return ret
+
     def plan_path(
         self,
         target: Union[Coordinates, np.ndarray],
         arm: Literal["larm", "rarm"],
         co_object: Optional[Coordinates] = None,
+        consider_table: bool = True,
         consider_dummy: bool = True,
         consider_object: bool = True,
     ) -> Optional[Trajectory]:
 
         eq_const, ineq_const, box_const = self._setup_constraints(
-            target, arm, co_object, consider_dummy, consider_object
+            target,
+            arm,
+            co_object=co_object,
+            consider_table=consider_table,
+            consider_dummy=consider_dummy,
+            consider_object=consider_object,
         )
         joint_names = PR2Config(control_arm=arm).get_control_joint_names()
         q_start = get_robot_state(self.pr2, joint_names)
@@ -336,8 +391,14 @@ class MugcupGraspExecutor(ExecutorBase):
     pregrasp_gripper_pos: ClassVar[float] = 0.05
 
     def __init__(self):
-        super().__init__()
-        self.path_planner = PathPlanner(self.pr2)
+        rospack = rospkg.RosPack()
+        pkg_path = Path(rospack.get_path("frmax_ros"))
+        mug_model_path = pkg_path / "model" / "hubolab_mug.stl"
+        mesh = trimesh.load_mesh(mug_model_path)
+        mugcup = MeshLink(mesh, with_sdf=True)
+        super().__init__(mugcup)
+
+        self.path_planner = PathPlanner(self.pr2, self.scene)
         self.tf_object_to_april = CoordinateTransform(np.array([0.013, -0.004, -0.095]), np.eye(3))
 
     def initialize_robot(self):
@@ -352,6 +413,7 @@ class MugcupGraspExecutor(ExecutorBase):
         self.ri.move_gripper("larm", self.pregrasp_gripper_pos)
 
     def get_tf_object_to_base(self) -> CoordinateTransform:
+        self.pose_provider.reset()
         tf_april_to_base = self.pose_provider.get_tf_object_to_base()
         tf_object_to_april = CoordinateTransform(
             np.array([0.013, -0.004, -0.095]), np.eye(3), "object", "april"
@@ -443,9 +505,64 @@ class MugcupGraspExecutor(ExecutorBase):
         self.execute(q_traj_reaching[::-1], times_reaching[::-1], "larm")
         return annot
 
+    @lru_cache(maxsize=1)
+    def _get_q_seed_for_recovery(self) -> List[np.ndarray]:
+        # output is 7dof rarm angle vector
+        pr2 = PR2()
+        arm = pr2.rarm
+        end_coords = pr2.rarm_end_coords
+        lib = []
+        while len(lib) < 30:
+            pr2.reset_manip_pose()
+            x = np.random.uniform(0.3, 0.6)
+            y = np.random.uniform(-0.5, 0.5)
+            z = np.random.uniform(0.7, 0.9)
+            co = Coordinates(pos=[x, y, z], rot=[0.0, 1.6, 0.5])
+            out = arm.inverse_kinematics(co, link_list=arm.link_list, move_target=end_coords)
+            if out is not False:
+                lib.append(np.array(out))
+        return lib
+
+    def recover(self):
+        tf_object_to_base = self.get_tf_object_to_base()
+        co = tf_object_to_base.to_skrobot_coords()
+        co_grasp = co.copy_worldcoords()
+        co_grasp.translate([0.04, 0.0, 0.09])
+        co_grasp.rotate(np.pi * 0.5, "y")
+        co_grasp.rotate(np.pi * 0.5, "x")
+        co_pregrasp = co_grasp.copy_worldcoords()
+        co_pregrasp.translate([-0.06, 0.0, 0.0])
+        self.scene.update(co_object=co, co_axis=co_pregrasp)
+        q_seed_list = self._get_q_seed_for_recovery()
+        av_init = self.pr2.angle_vector()
+        qs_recover_grasp = []
+        for q_seed in q_seed_list:
+            q_reach = self.path_planner.solve_ik_skrobot(
+                co_pregrasp,
+                "rarm",
+                q_seed=q_seed,
+                co_object=co,
+                consider_dummy=False,
+            )
+            if q_reach is None:
+                rospy.loginfo("failed to solve")
+                continue
+            self.pr2.angle_vector(av_init)
+            qs_reach = self.path_planner.plan_path(
+                q_reach, "rarm", co_object=co, consider_dummy=False
+            )
+            if qs_reach is None:
+                continue
+            rospy.loginfo("recovering reaching trajectory solved")
+            qs_recover_grasp.extend(list(qs_reach.resample(10).numpy()))
+            break
+        print(qs_recover_grasp)
+        # self.execute(qs_recover_grasp, [1.0] * len(qs_recover_grasp), "rarm")
+
 
 if __name__ == "__main__":
     e = MugcupGraspExecutor()
     traj = GraspingPlanerTrajectory(np.zeros(3 * 6 + 3))
-    e.rollout(traj, np.zeros(3))
+    # e.rollout(traj, np.zeros(3))
+    e.recover()
     rospy.spin()
