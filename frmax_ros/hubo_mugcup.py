@@ -4,7 +4,6 @@ import subprocess
 import threading
 import time
 from abc import abstractmethod
-from functools import lru_cache
 from pathlib import Path
 from typing import ClassVar, List, Literal, Optional, Tuple, Union
 
@@ -43,6 +42,10 @@ from utils import CoordinateTransform
 
 from frmax_ros.node import ObjectPoseProvider, YellowTapeOffsetProvider
 from frmax_ros.utils import CoordinateTransform
+
+
+class RecoveryAborted(Exception):
+    ...
 
 
 class PlanningScene:
@@ -228,7 +231,6 @@ class PathPlanner:
     ) -> Tuple[AbstractEqConst, CollFreeConst, BoxConst]:
         if consider_object:
             assert co_object is not None
-            self.scene.update(co_object)
 
         sdfs = []
         if consider_table:
@@ -470,6 +472,8 @@ class MugcupGraspExecutor(ExecutorBase):
 
     def rollout(self, planer_traj: GraspingPlanerTrajectory, error: np.ndarray) -> Optional[bool]:
         tf_object_to_base = self.get_tf_object_to_base()
+        rospy.loginfo(f"pose_3d: {tf_object_to_base.to_pose3d()}")
+
         tf_ef_to_base_seq = planer_traj.instantiate(tf_object_to_base, error)
         path_msg = planer_traj.get_path_msg(tf_object_to_base, error)
         self.pub_grasp_path.publish(path_msg)
@@ -547,84 +551,11 @@ class MugcupGraspExecutor(ExecutorBase):
         self.execute(q_traj_reaching[::-1], times_reaching[::-1], "larm")
         return annot
 
-    @lru_cache(maxsize=1)
-    def _get_q_seed_for_recovery(self) -> List[np.ndarray]:
-        # output is 7dof rarm angle vector
-        pr2 = PR2()
-        arm = pr2.rarm
-        end_coords = pr2.rarm_end_coords
-        lib = []
-        while len(lib) < 30:
-            pr2.reset_manip_pose()
-            x = np.random.uniform(0.3, 0.6)
-            y = np.random.uniform(-0.5, 0.5)
-            z = np.random.uniform(0.7, 0.9)
-            co = Coordinates(pos=[x, y, z], rot=[0.0, 1.6, 0.5])
-            out = arm.inverse_kinematics(co, link_list=arm.link_list, move_target=end_coords)
-            if out is not False:
-                lib.append(np.array(out))
-        return lib
-
-    def recover(self, target_pos3d: np.ndarray):
-        assert False, "dont use"
-        tf_object_to_base = self.get_tf_object_to_base()
-        co = tf_object_to_base.to_skrobot_coords()
-        co_grasp = co.copy_worldcoords()
-        co_grasp.translate([0.05, 0.0, 0.07])
-        co_grasp.rotate(np.pi * 0.5, "y")
-        co_grasp.rotate(np.pi * 0.5, "x")
-        co_pregrasp = co_grasp.copy_worldcoords()
-        dist_back = 0.05
-        co_pregrasp.translate([-dist_back, 0.0, 0.0])
-        self.scene.update(co_object=co, co_axis=co_pregrasp)
-        q_seed_list = self._get_q_seed_for_recovery()
-        av_init = self.pr2.angle_vector()
-        joint_names = PR2Config(control_arm="rarm").get_control_joint_names()
-        qs_recover_grasp = []
-        for q_seed in q_seed_list:
-            q_pregrasp = self.path_planner.solve_ik_skrobot(
-                co_pregrasp,
-                "rarm",
-                q_seed=q_seed,
-                co_object=co,
-                consider_dummy=False,
-            )
-            if q_pregrasp is None:
-                continue
-
-            self.pr2.angle_vector(av_init)
-            traj_reach = self.path_planner.plan_path(
-                q_pregrasp, "rarm", co_object=co, consider_dummy=False
-            )
-            if traj_reach is None:
-                continue
-            rospy.loginfo("recovering reaching trajectory solved")
-            qs_reach = list(traj_reach.resample(10).numpy())
-            qs_recover_grasp.extend(qs_reach)
-
-            set_robot_state(self.pr2, joint_names, q_pregrasp)
-            self.pr2.rarm.move_end_pos([dist_back, 0.0, 0.0])
-            q_grasp = get_robot_state(self.pr2, joint_names)
-            qs_recover_grasp.append(q_grasp)
-            break
-
-        times = [1.0] * (len(qs_recover_grasp) - 1) + [2.0]
-        self.execute(qs_recover_grasp, times, "rarm")
-        time.sleep(2.0)
-        self.ri.move_gripper("rarm", 0.0, effort=100)
-        time.sleep(1.0)
-        is_grasped = self.ri.gripper_states["rarm"].process_value > 0.004
-        rospy.loginfo(f"is grasped: {is_grasped}")
-        if not is_grasped:
-            self.ri.move_gripper("rarm", self.pregrasp_gripper_pos)
-            time.sleep(0.5)
-            self.execute(qs_recover_grasp[::-1], times[::-1], "rarm")
-            return False
-
 
 if __name__ == "__main__":
     e = MugcupGraspExecutor()
     traj = GraspingPlanerTrajectory(np.zeros(3 * 6 + 3))
     e.rollout(traj, np.zeros(3))
-    # e.recover()
+    # target = np.array([ 0.43684961, -0.06240444, -1.5213599 ])
+    # e.recover(target)
     rospy.spin()
