@@ -27,7 +27,7 @@ from skmp.trajectory import Trajectory
 from skrobot.coordinates import Coordinates
 from skrobot.interfaces.ros import PR2ROSRobotInterface
 from skrobot.model.joint import RotationalJoint
-from skrobot.model.primitives import Axis, Box, MeshLink
+from skrobot.model.primitives import Box, MeshLink
 from skrobot.models.pr2 import PR2
 from skrobot.sdf import UnionSDF
 from skrobot.viewers import TrimeshSceneViewer
@@ -44,7 +44,6 @@ class ExecutorBase:  # TODO: move later to task-agonistic module
     pr2: PR2
     ri: PR2ROSRobotInterface
     pub_grasp_path: Publisher
-    viewer: TrimeshSceneViewer
 
     def __init__(self):
         # rospy.init_node("robot_interface", disable_signals=True, anonymous=True)
@@ -55,8 +54,6 @@ class ExecutorBase:  # TODO: move later to task-agonistic module
         self.pub_grasp_path = rospy.Publisher("/grasp_path", RosPath, queue_size=1, latch=True)
         self.pose_provider = ObjectPoseProvider()
         self.offset_prover = YellowTapeOffsetProvider()
-        self.viewer = TrimeshSceneViewer()
-        self.viewer.add(self.pr2)
 
     @staticmethod
     def _confine_infinite_rotation(pr2: PR2, filter_words: List[str]) -> None:
@@ -117,13 +114,14 @@ class ExecutorBase:  # TODO: move later to task-agonistic module
             return self.get_manual_annotation()
 
 
-class PathPlanner:
+class PlanningScene:
     table: Box
     dummy_obstacle: Box
     target_object: MeshLink
     pr2: PR2
+    viewer: Optional[TrimeshSceneViewer]
 
-    def __init__(self, pr2: PR2):
+    def __init__(self, pr2: PR2, visualize: bool = True):
         rospack = rospkg.RosPack()
         pkg_path = Path(rospack.get_path("frmax_ros"))
         mug_model_path = pkg_path / "model" / "hubolab_mug.stl"
@@ -134,11 +132,35 @@ class PathPlanner:
         h = 0.72
         table = Box(extents=[0.5, 0.9, h], with_sdf=True)
         table.translate([0.5, 0, 0.5 * h])
+        table.visual_mesh.visual.face_colors = [165, 42, 42, 255]
         self.table = table
 
         dummy_obstacle = Box([0.45, 0.6, 0.03], pos=[0.5, 0.0, 1.2], with_sdf=True)
+        dummy_obstacle.visual_mesh.visual.face_colors = [150, 150, 150, 100]
         self.dummy_obstacle = dummy_obstacle
         self.pr2 = pr2
+        if visualize:
+            self.viewer = TrimeshSceneViewer()
+            self.viewer.add(table)
+            self.viewer.add(dummy_obstacle)
+            self.viewer.add(mugcup)
+            self.viewer.add(pr2)
+            self.viewer.show()
+
+    def update(self, co_object: Optional[Coordinates] = None):
+        if co_object is not None:
+            self.target_object.newcoords(co_object)
+        if self.viewer is not None:
+            self.viewer.redraw()
+
+
+class PathPlanner:
+    scene: PlanningScene
+    pr2: PR2
+
+    def __init__(self, pr2: PR2, visualize: bool = True):
+        self.pr2 = pr2
+        self.scene = PlanningScene(pr2, visualize=visualize)
 
     def _setup_constraints(
         self,
@@ -152,15 +174,15 @@ class PathPlanner:
     ) -> Tuple[AbstractEqConst, CollFreeConst, BoxConst]:
         if consider_object:
             assert co_object is not None
-            self.target_object.newcoords(co_object)
+            self.scene.update(co_object)
 
         sdfs = []
         if consider_table:
-            sdfs.append(self.table.sdf)
+            sdfs.append(self.scene.table.sdf)
         if consider_dummy:
-            sdfs.append(self.dummy_obstacle.sdf)
+            sdfs.append(self.scene.dummy_obstacle.sdf)
         if consider_object:
-            sdfs.append(self.target_object.sdf)
+            sdfs.append(self.scene.target_object.sdf)
         usdf = UnionSDF(sdfs)
 
         plan_conf = PR2Config(control_arm=arm, base_type=base_type)
@@ -218,7 +240,6 @@ class PathPlanner:
         co_object: Optional[Coordinates] = None,
         consider_dummy: bool = True,
         consider_object: bool = True,
-        display_planning_scene: bool = False,
     ) -> Optional[Trajectory]:
 
         eq_const, ineq_const, box_const = self._setup_constraints(
@@ -231,17 +252,6 @@ class PathPlanner:
         ompl_config = OMPLSolverConfig(n_max_call=5000, simplify=True, n_max_satisfaction_trial=20)
         ompl_solver = OMPLSolver.init(ompl_config).as_parallel_solver()
         ompl_solver.setup(problem)
-
-        if display_planning_scene:
-            viewer = TrimeshSceneViewer()
-            viewer.add(self.table)
-            viewer.add(self.dummy_obstacle)
-            viewer.add(self.target_object)
-            viewer.add(self.pr2)
-            if isinstance(target, Coordinates):
-                axis = Axis.from_coords(target)
-                viewer.add(axis)
-            viewer.show()
 
         ret = ompl_solver.solve()
         return ret.traj
