@@ -235,7 +235,6 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
 
 
 class AutomaticTrainerBase(ABC):
-    project_path: Path
     i_episode_next: int
     rollout_executor: RolloutExecutorBase
     sampler: DistributionGuidedSampler
@@ -245,11 +244,10 @@ class AutomaticTrainerBase(ABC):
         ls_param: np.ndarray,
         ls_error: np.ndarray,
         sampler_config: DGSamplerConfig,
-        project_name: str,
         n_init_sample: int = 10,
     ):
 
-        project_path = self.get_project_path(project_name)
+        project_path = self.get_project_path()
 
         if len(list(project_path.iterdir())) > 0:
             while True:
@@ -287,10 +285,26 @@ class AutomaticTrainerBase(ABC):
             situation_sampler=self.sample_situation,
             is_valid_param=self.is_valid_param,
         )
-        self.project_path = project_path
 
     @staticmethod
-    def get_project_path(project_name: str) -> Path:
+    @abstractmethod
+    def get_project_name() -> str:
+        pass
+
+    def __getstate__(self):  # pickling
+        state = self.__dict__.copy()
+        executor_type = type(self.rollout_executor)
+        state["rollout_executor"] = executor_type
+        return state
+
+    def __setstate__(self, state):  # unpickling
+        executor_type = state["rollout_executor"]
+        state["rollout_executor"] = executor_type()
+        self.__dict__.update(state)
+
+    @classmethod
+    def get_project_path(cls) -> Path:
+        project_name = cls.get_project_name()
         rospack = rospkg.RosPack()
         pkg_path = rospack.get_path("frmax_ros")
         data_path = Path(pkg_path) / "data"
@@ -313,14 +327,15 @@ class AutomaticTrainerBase(ABC):
         pass
 
     def save(self):
-        data_path = self.project_path / f"trainer_cache-{self.i_episode_next}.pkl"
+        project_path = self.get_project_path()
+        data_path = project_path / f"trainer_cache-{self.i_episode_next}.pkl"
         with open(data_path, "wb") as f:
             dill.dump(self, f)
         rospy.loginfo(f"save trainer to {data_path}")
 
     @classmethod
-    def load(cls, project_name: str) -> "AutomaticTrainerBase":
-        project_path = cls.get_project_path(project_name)
+    def load(cls) -> "AutomaticTrainerBase":
+        project_path = cls.get_project_path()
         # load the one with largest episode number
         max_episode = -1
         max_episode_path = None
@@ -333,7 +348,8 @@ class AutomaticTrainerBase(ABC):
         assert max_episode_path is not None, "no cache file found"
         rospy.loginfo(f"load trainer from {max_episode_path}")
         with open(max_episode_path, "rb") as f:
-            return dill.load(f)
+            trainer = dill.load(f)
+        return trainer
 
     def next(self) -> None:
         speak(f"start episode {self.i_episode_next}")

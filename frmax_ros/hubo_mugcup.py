@@ -423,7 +423,7 @@ class MugcupGraspTrainer(AutomaticTrainerBase):
             r_exploration=0.5,
             learning_rate=1.0,
         )
-        super().__init__(ls_param, ls_err, config, "mugcup", n_init_sample=10)
+        super().__init__(ls_param, ls_err, config, n_init_sample=3)
 
     @staticmethod
     def get_rollout_executor() -> RolloutExecutorBase:
@@ -437,11 +437,16 @@ class MugcupGraspTrainer(AutomaticTrainerBase):
         traj = GraspingPlanerTrajectory(param)
         return traj.is_valid
 
+    @staticmethod
+    def get_project_name() -> str:
+        return "mugcup"
+
 
 if __name__ == "__main__":
     # e = MugcupGraspRolloutExecutor()
     # e.rollout(np.zeros(21), np.zeros(3))
     # rospy.spin()
 
-    trainer = MugcupGraspTrainer()
+    # trainer = MugcupGraspTrainer()
+    trainer = MugcupGraspTrainer.load()
     trainer.next()
