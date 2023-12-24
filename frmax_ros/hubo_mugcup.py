@@ -39,6 +39,7 @@ from skrobot.sdf import UnionSDF
 from tinyfk import BaseType, RotationType
 from utils import CoordinateTransform
 
+from frmax_ros._hubo_mugcup_recovery import RecoveryMixIn
 from frmax_ros.rollout import (
     AutomaticTrainerBase,
     PlanningScene,
@@ -224,7 +225,7 @@ class PathPlanner:
 class GraspingPlanerTrajectory:
     seq_tf_ef_to_nominal: List[CoordinateTransform]
     is_valid: bool
-    pregrasp_gripper_pos: ClassVar[float] = 0.03
+    pregrasp_gripper_pos: ClassVar[float] = 0.04
 
     def __init__(self, param: np.ndarray):
         assert param.shape == (3 * 6 + 3,)
@@ -258,7 +259,7 @@ class GraspingPlanerTrajectory:
             is_valid = False
         self.is_valid = is_valid
 
-        height = 0.08
+        height = 0.075
         tf_seq = []
         for pose in planer_traj:
             trans = np.array([pose[0], pose[1], height])
@@ -303,7 +304,7 @@ class GraspingPlanerTrajectory:
         return path_msg
 
 
-class MugcupGraspRolloutExecutor(RolloutExecutorBase):
+class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
     path_planner: PathPlanner
     tf_object_to_april: CoordinateTransform
     pregrasp_gripper_pos: ClassVar[float] = 0.03
@@ -330,6 +331,7 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
         self.ri.angle_vector(self.pr2.angle_vector(), time_scale=5.0)
         self.ri.move_gripper("larm", self.pregrasp_gripper_pos)
         self.ri.move_gripper("rarm", self.pregrasp_gripper_pos)
+        self.ri.wait_interpolation()
 
     def get_tf_object_to_base(self) -> CoordinateTransform:
         self.pose_provider.reset()
@@ -362,8 +364,8 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
         self.scene.update(tf_object_to_base.to_skrobot_coords())
 
         x_pos, y_pos = tf_object_to_base.trans[:2]
-        if x_pos > 0.6 or y_pos > 0.2:
-            reason = "invalid object position"
+        if x_pos > 0.7 or y_pos > 0.2:
+            reason = f"invalid object position ({x_pos}, {y_pos})"
             raise RolloutAbortedException(reason)
 
         tf_ef_to_base_seq = planer_traj.instantiate(tf_object_to_base, error)
@@ -410,7 +412,7 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
 
         q_traj_reaching = None
         q_init = get_robot_state(self.pr2, joint_names)
-        for _ in range(100):
+        for _ in range(5):
             ret = plan_whole(q_init)
             if ret is not None:
                 q_traj_reaching = ret
@@ -505,7 +507,7 @@ class MugcupGraspTrainer(AutomaticTrainerBase):
             r_exploration=0.5,
             learning_rate=1.0,
         )
-        super().__init__(ls_param, ls_err, config, n_init_sample=3)
+        super().__init__(ls_param, ls_err, config, n_init_sample=10)
 
     @staticmethod
     def get_rollout_executor() -> RolloutExecutorBase:

@@ -175,23 +175,28 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
     def rollout(self, param: np.ndarray, error: np.ndarray) -> bool:
         pass
 
-    def recover(self):
-        # This is the simplest implementation of recovery
-        # which ask human to fix the environment
-        while True:
-            user_input = input("push y after fixing the environment")
-            if user_input.lower() == "y":
-                break
+    def recover(self) -> bool:
+        rospy.logwarn("recovery is not implemented")
+        return False
 
     def robust_rollout(self, param: np.ndarray, error: np.ndarray) -> bool:
         while True:
             try:
-                label = self.rollout(param, error)
-                return label
+                return self.rollout(param, error)
             except RolloutAbortedException as e:
                 rospy.logwarn(e.message)
-                speak(f"recovery required. reason is {e.message}")
-                self.recover()
+                speak(f"automatic recovery start")
+                if self.recover():
+                    speak(f"automatic recovery finished")
+                    try:
+                        return self.rollout(param, error)
+                    except RolloutAbortedException as e:
+                        speak(f"rollout failed even after automatic recovery")
+                        speak(f"manual recovery required. reason is {e.message}")
+                        while True:
+                            user_input = input("push y after fixing the environment")
+                            if user_input.lower() == "y":
+                                break
 
     def send_command_to_real_robot(
         self, q_traj: List[np.ndarray], times: List[float], arm: Literal["larm", "rarm"]
