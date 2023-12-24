@@ -57,10 +57,11 @@ class PathPlanner:
         consider_dummy: bool = True,
         consider_object: bool = True,
         base_type: BaseType = BaseType.FIXED,
-    ) -> Tuple[AbstractEqConst, CollFreeConst, BoxConst]:
+    ) -> Tuple[AbstractEqConst, Optional[CollFreeConst], BoxConst]:
         if consider_object:
             assert co_object is not None
 
+        plan_conf = PR2Config(control_arm=arm, base_type=base_type)
         sdfs = []
         if consider_table:
             sdfs.append(self.scene.table.sdf)
@@ -69,11 +70,12 @@ class PathPlanner:
             sdfs.append(self.scene.dummy_obstacle.sdf)
         if consider_object:
             sdfs.append(self.scene.target_object.sdf)
-        usdf = UnionSDF(sdfs)
-
-        plan_conf = PR2Config(control_arm=arm, base_type=base_type)
-        colkin = plan_conf.get_collision_kin()
-        ineq_const = CollFreeConst(colkin, usdf, self.pr2, only_closest_feature=True)
+        if len(sdfs) > 0:
+            usdf = UnionSDF(sdfs)
+            colkin = plan_conf.get_collision_kin()
+            ineq_const = CollFreeConst(colkin, usdf, self.pr2, only_closest_feature=True)
+        else:
+            ineq_const = None
 
         plan_conf.get_control_joint_names()
 
@@ -117,7 +119,8 @@ class PathPlanner:
             eq_const, box_const, None, q_init, config=satis_con, n_trial_budget=100
         )
         assert ret.success, "as base type is planer, the IK should be always feasible"
-        return ineq_const.is_valid(ret.q)
+        if ineq_const is not None:
+            return ineq_const.is_valid(ret.q)
 
     def solve_ik_skrobot(
         self,
@@ -144,8 +147,7 @@ class PathPlanner:
             rospy.loginfo("callision agnonistic IK failed")
             return None
         assert isinstance(ret, np.ndarray)
-        print(ineq_const.evaluate_single(ret, with_jacobian=False))
-        if not ineq_const.is_valid(ret):
+        if ineq_const is not None and not ineq_const.is_valid(ret):
             rospy.loginfo("solved Ik but in collision")
             return None
         return ret
@@ -345,6 +347,24 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
             reason = "Failed to plan reaching"
             raise RolloutAbortedException(reason)
 
+        # plan grasping using uncalibrated pose
+        # this to check if the trajectory is not in collision
+        # at least without calibration
+        # NOTE that this is not used for actual execution
+        q_now = q_traj_reaching[-1]
+        for tf_ef_to_base in tf_ef_to_base_seq:
+            q_now = self.path_planner.solve_ik_skrobot(
+                tf_ef_to_base.to_skrobot_coords(),
+                "larm",
+                q_now,
+                consider_table=True,
+                consider_object=False,
+                consider_dummy=False,
+            )
+            if q_now is None:
+                reason = "IK failed without calibration"
+                raise RolloutAbortedException(reason)
+
         # now execute reaching and grasping
         times_reaching = [0.3] * 7 + [0.6] * 2 + [1.0]
         q_traj_reaching = q_traj_reaching.resample(10).numpy()
@@ -364,20 +384,23 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
         self.ri.move_gripper("larm", planer_traj.pregrasp_gripper_pos)
 
         # plan grasping using the calibrated pose
-        set_robot_state(self.pr2, joint_names, q_traj_reaching[-1])
-        q_list = []
+        q_list = [q_traj_reaching[-1]]
         for tf_ef_to_base in tf_efcalib_to_base_seq:
-            res = self.pr2.larm.inverse_kinematics(
+            q_now = self.path_planner.solve_ik_skrobot(
                 tf_ef_to_base.to_skrobot_coords(),
-                link_list=self.pr2.larm.link_list,
-                move_target=self.pr2.larm_end_coords,
+                "larm",
+                q_list[-1],
+                consider_table=False,
+                consider_object=False,
+                consider_dummy=False,
             )
-            if isinstance(res, bool) and res == False:
-                reason = "IK failed"
+            if q_now is None:
+                # go back to home pose
+                self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
+                reason = "IK failed with calibration"
                 raise RolloutAbortedException(reason)
+            q_list.append(q_now)
 
-            q = get_robot_state(self.pr2, joint_names)
-            q_list.append(q)
         q_traj_grasping = np.array(q_list)
         set_robot_state(self.pr2, joint_names, q_traj_grasping[-1])
 
