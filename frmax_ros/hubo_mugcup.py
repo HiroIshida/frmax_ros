@@ -24,7 +24,11 @@ from skmp.kinematics import (
 )
 from skmp.robot.pr2 import PR2Config
 from skmp.robot.utils import get_robot_state, set_robot_state
-from skmp.satisfy import SatisfactionConfig, satisfy_by_optimization_with_budget
+from skmp.satisfy import (
+    SatisfactionConfig,
+    satisfy_by_optimization,
+    satisfy_by_optimization_with_budget,
+)
 from skmp.solver.interface import Problem
 from skmp.solver.ompl_solver import OMPLSolver, OMPLSolverConfig
 from skmp.trajectory import Trajectory
@@ -143,7 +147,7 @@ class PathPlanner:
         if ineq_const is not None:
             return ineq_const.is_valid(ret.q)
 
-    def solve_ik_skrobot(
+    def solve_ik(
         self,
         co: Coordinates,
         arm: Literal["larm", "rarm"],
@@ -152,6 +156,7 @@ class PathPlanner:
         consider_table: bool = True,
         consider_dummy: bool = True,
         consider_object: bool = True,
+        use_skrobot: bool = False,
     ) -> Optional[np.ndarray]:
         eq_const, ineq_const, box_const = self._setup_constraints(
             co,
@@ -161,17 +166,27 @@ class PathPlanner:
             consider_dummy=consider_dummy,
             consider_object=consider_object,
         )
-        arm_robot = self.pr2.rarm if arm == "rarm" else self.pr2.larm
-        move_target = self.pr2.rarm_end_coords if arm == "rarm" else self.pr2.larm_end_coords
-        ret = arm_robot.inverse_kinematics(co, move_target=move_target, seed=q_seed)
-        if isinstance(ret, bool) and ret == False:
-            rospy.loginfo("callision agnonistic IK failed")
-            return None
-        assert isinstance(ret, np.ndarray)
-        if ineq_const is not None and not ineq_const.is_valid(ret):
-            rospy.loginfo("solved Ik but in collision")
-            return None
-        return ret
+        if use_skrobot:
+            arm_robot = self.pr2.rarm if arm == "rarm" else self.pr2.larm
+            move_target = self.pr2.rarm_end_coords if arm == "rarm" else self.pr2.larm_end_coords
+            q = arm_robot.inverse_kinematics(co, move_target=move_target, seed=q_seed)
+            if isinstance(q, bool) and q == False:
+                rospy.loginfo("callision agnonistic IK failed")
+                return None
+            assert isinstance(q, np.ndarray)
+            if ineq_const is not None and not ineq_const.is_valid(q):
+                rospy.loginfo("solved Ik but in collision")
+                return None
+            return q
+        else:
+            satis_con = SatisfactionConfig(acceptable_error=1e-5, disp=False, n_max_eval=50)
+            ret = satisfy_by_optimization(eq_const, box_const, ineq_const, q_seed, config=satis_con)
+            if ret.success:
+                rospy.loginfo("IK solved")
+                return ret.q
+            else:
+                rospy.loginfo("IK failed")
+                return None
 
     def plan_path(
         self,
@@ -380,7 +395,7 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
             # NOTE that this is not used for actual execution
             q_now = q_traj_reaching[-1]
             for tf_ef_to_base in tf_ef_to_base_seq:
-                q_now = self.path_planner.solve_ik_skrobot(
+                q_now = self.path_planner.solve_ik(
                     tf_ef_to_base.to_skrobot_coords(),
                     "larm",
                     q_now,
@@ -409,8 +424,8 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
         self.send_command_to_real_robot(q_traj_reaching, times_reaching, "larm")
 
         # calibrate
+        time.sleep(3.0)
         self.offset_prover.reset()
-        time.sleep(2.0)
         tf_efcalib_to_ef = self.offset_prover.get_cloudtape_to_tape().inverse()
         tf_efcalib_to_ef.src = "efcalib"
         tf_efcalib_to_ef.dest = "ef"
@@ -424,13 +439,14 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
         # plan grasping using the calibrated pose
         q_list = [q_traj_reaching[-1]]
         for tf_ef_to_base in tf_efcalib_to_base_seq:
-            q_now = self.path_planner.solve_ik_skrobot(
+            q_now = self.path_planner.solve_ik(
                 tf_ef_to_base.to_skrobot_coords(),
                 "larm",
                 q_list[-1],
                 consider_table=False,
                 consider_object=False,
                 consider_dummy=False,
+                use_skrobot=True,
             )
             if q_now is None:
                 # go back to home pose
