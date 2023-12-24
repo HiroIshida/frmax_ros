@@ -426,7 +426,12 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
         # calibrate
         time.sleep(3.0)
         self.offset_prover.reset()
-        tf_efcalib_to_ef = self.offset_prover.get_cloudtape_to_tape().inverse()
+        try:
+            tf_efcalib_to_ef = self.offset_prover.get_cloudtape_to_tape().inverse()
+        except TimeoutError:
+            self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
+            reason = "failed to get calibration"
+            raise RolloutAbortedException(reason)
         tf_efcalib_to_ef.src = "efcalib"
         tf_efcalib_to_ef.dest = "ef"
         tf_efcalib_to_base_seq = [
