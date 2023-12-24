@@ -98,6 +98,7 @@ class PlanningScene:
 @dataclass
 class RolloutAbortedException(Exception):
     message: str
+    perceptual: bool
 
 
 class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
@@ -108,7 +109,7 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
     pub_grasp_path: Publisher
     scene: PlanningScene
 
-    def __init__(self, target_object: MeshLink, use_obinata_keyboard: bool = False):
+    def __init__(self, target_object: MeshLink, use_obinata_keyboard: bool = True):
         # rospy.init_node("robot_interface", disable_signals=True, anonymous=True)
         self.pr2 = PR2()
         self.ri = PR2ROSRobotInterface(self.pr2)
@@ -186,17 +187,19 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
             except RolloutAbortedException as e:
                 rospy.logwarn(e.message)
                 speak(f"automatic recovery start")
-                if self.recover():
-                    speak(f"automatic recovery finished")
+
+                if not e.perceptual:
+                    if self.recover():
+                        speak(f"automatic recovery finished")
                     try:
                         return self.rollout(param, error)
-                    except RolloutAbortedException as e:
+                    except RolloutAbortedException:
                         speak(f"rollout failed even after automatic recovery")
-                        speak(f"manual recovery required. reason is {e.message}")
-                        while True:
-                            user_input = input("push y after fixing the environment")
-                            if user_input.lower() == "y":
-                                break
+                speak(f"manual recovery required. reason is {e.message}")
+                while True:
+                    user_input = input("push y after fixing the environment")
+                    if user_input.lower() == "y":
+                        break
 
     def send_command_to_real_robot(
         self, q_traj: List[np.ndarray], times: List[float], arm: Literal["larm", "rarm"]

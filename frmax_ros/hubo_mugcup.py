@@ -360,13 +360,13 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
             tf_object_to_base = self.get_tf_object_to_base()
         except TimeoutError:
             reason = "failed to get object pose"
-            raise RolloutAbortedException(reason)
+            raise RolloutAbortedException(reason, True)
         self.scene.update(tf_object_to_base.to_skrobot_coords())
 
         x_pos, y_pos = tf_object_to_base.trans[:2]
         if x_pos > 0.7 or y_pos > 0.2:
             reason = f"invalid object position ({x_pos}, {y_pos})"
-            raise RolloutAbortedException(reason)
+            raise RolloutAbortedException(reason, False)
 
         tf_ef_to_base_seq = planer_traj.instantiate(tf_object_to_base, error)
         path_msg = planer_traj.get_path_msg(tf_object_to_base, error)
@@ -418,7 +418,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
                 q_traj_reaching = ret
                 break
         if q_traj_reaching is None:
-            raise RolloutAbortedException("planning failed")
+            raise RolloutAbortedException("planning failed", False)
 
         # now execute reaching and grasping
         times_reaching = [0.3] * 7 + [0.6] * 2 + [1.0]
@@ -433,7 +433,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         except TimeoutError:
             self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
             reason = "failed to get calibration"
-            raise RolloutAbortedException(reason)
+            raise RolloutAbortedException(reason, True)
         tf_efcalib_to_ef.src = "efcalib"
         tf_efcalib_to_ef.dest = "ef"
         tf_efcalib_to_base_seq = [
@@ -459,7 +459,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
                 # go back to home pose
                 self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
                 reason = "IK failed with calibration"
-                raise RolloutAbortedException(reason)
+                raise RolloutAbortedException(reason, False)
             q_list.append(q_now)
 
         q_traj_grasping = np.array(q_list)
@@ -480,8 +480,8 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         annot = self.get_auto_annotation()
         if annot is None:
             reason = "ambiguous annotation"
-            raise RolloutAbortedException(reason)
-        self.ri.move_gripper("larm", self.pregrasp_gripper_pos)
+            raise RolloutAbortedException(reason, False)
+        self.ri.move_gripper("larm", 0.08)
 
         # back to initial pose
         self.send_command_to_real_robot(q_traj_grasping[::-1], [0.5] * len(q_traj_grasping), "larm")
@@ -528,9 +528,18 @@ class MugcupGraspTrainer(AutomaticTrainerBase):
 
 if __name__ == "__main__":
     # e = MugcupGraspRolloutExecutor()
+    # e.recover()
     # e.rollout(np.zeros(21), np.zeros(3))
-    # rospy.spin()
+    import argparse
 
-    # trainer = MugcupGraspTrainer()
-    trainer = MugcupGraspTrainer.load()
-    trainer.next()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--resume", action="store_true", help="resume")
+    parser.add_argument("--episode", type=int, help="episode to load")
+    args = parser.parse_args()
+    np.random.seed(0)
+    if args.resume:
+        trainer = MugcupGraspTrainer.load(args.episode)
+    else:
+        trainer = MugcupGraspTrainer()
+    for _ in range(300):
+        trainer.next()
