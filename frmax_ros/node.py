@@ -75,19 +75,29 @@ class ObjectPoseProvider:
     listener: tf.TransformListener
     queue: AverageQueue
     _tf_april_to_base: Optional[CoordinateTransform]
-    april_z_offset: float
+    _z_height: Optional[float]
 
-    def __init__(self, april_z_offset: float = 0.016):
+    def __init__(self):
         self.listener = tf.TransformListener()
         self.queue = AverageQueue(max_size=10)
         self._tf_april_to_base = None
-        self.april_z_offset = april_z_offset
+        self._z_height = None
         rospy.Timer(rospy.Duration(0.1), self.update_queue)
         self.pub_april_pose = Publisher("april_pose", PoseStamped, queue_size=1, latch=True)
+        self.sub_points = Subscriber(
+            "/remote/ExtractIndices/output", PointCloud2, self.callback_points
+        )
+
+    def callback_points(self, msg: PointCloud2) -> None:
+        if self._z_height is not None:
+            return
+        arr = np.array(list(pc2.read_points(msg, skip_nans=True, field_names=("x", "y", "z"))))
+        self._z_height = np.max(arr[:, 2])
 
     def reset(self):
         self.queue = AverageQueue(max_size=10)
         self._tf_april_to_base = None
+        self._z_height = None
 
     def get_tf_object_to_base(self, timeout: float = 10.0) -> CoordinateTransform:
         if self._tf_april_to_base is not None:
@@ -116,6 +126,8 @@ class ObjectPoseProvider:
         return pose
 
     def update_queue(self, event) -> None:
+        if self._z_height is None:
+            return
         if self._tf_april_to_base is not None:
             return
         trans: Optional[np.ndarray] = None
@@ -133,7 +145,7 @@ class ObjectPoseProvider:
         # we care only yaw and know that othere angles are 0
         ypr = quaternion2rpy(xyzw2wxyz(rot))[0]
         xyztheta = np.hstack([trans, ypr[0]])
-        xyztheta[2] += self.april_z_offset
+        xyztheta[2] = self._z_height
 
         self.queue.enqueue((xyztheta, rospy.Time.now()))
 

@@ -43,5 +43,31 @@
       </rosparam>
     </node>
 
+
+    <node name="attension_clipper" pkg="nodelet" type="nodelet"
+      args="standalone jsk_pcl/AttentionClipper"
+      output="screen">
+      <remap from="~input/points" to="tf_transform/output"/>
+      <rosparam>
+        use_multiple_attention: false
+        dimension_x: 0.15
+        dimension_y: 0.15
+        dimension_z: 0.15
+        frame_id: april
+        initial_pos: [0.0, 0.0, 0.0]
+      </rosparam>
+    </node>
+
+    <node name="ExtractIndices" pkg="nodelet" type="nodelet"
+      args="standalone jsk_pcl/ExtractIndices"
+      output="screen">
+      <remap from="~input" to="tf_transform/output"/>
+      <remap from="~indices" to="attension_clipper/output/point_indices"/>
+      <rosparam>
+        keep_organized: true
+      </rosparam>
+    </node>
+
+
   </group>
 </launch>
