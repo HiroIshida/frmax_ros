@@ -177,6 +177,8 @@ class PathPlanner:
         self,
         target: Union[Coordinates, np.ndarray],
         arm: Literal["larm", "rarm"],
+        *,
+        q_start: Optional[np.ndarray] = None,
         co_object: Optional[Coordinates] = None,
         consider_table: bool = True,
         consider_dummy: bool = True,
@@ -192,11 +194,12 @@ class PathPlanner:
             consider_object=consider_object,
         )
         joint_names = PR2Config(control_arm=arm).get_control_joint_names()
-        q_start = get_robot_state(self.pr2, joint_names)
+        if q_start is None:
+            q_start = get_robot_state(self.pr2, joint_names)
         problem = Problem(q_start, box_const, eq_const, ineq_const, None)
 
         ompl_config = OMPLSolverConfig(n_max_call=5000, simplify=True, n_max_satisfaction_trial=20)
-        ompl_solver = OMPLSolver.init(ompl_config).as_parallel_solver()
+        ompl_solver = OMPLSolver.init(ompl_config)
         ompl_solver.setup(problem)
 
         ret = ompl_solver.solve()
@@ -363,28 +366,42 @@ class MugcupGraspRolloutExecutor(RolloutExecutorBase):
             return False
 
         # plan reaching
-        q_traj_reaching = self.path_planner.plan_path(co_init, "larm", co_object=co_object)
-        if q_traj_reaching is None:
-            reason = "Failed to plan reaching"
-            raise RolloutAbortedException(reason)
-
-        # plan grasping using uncalibrated pose
-        # this to check if the trajectory is not in collision
-        # at least without calibration
-        # NOTE that this is not used for actual execution
-        q_now = q_traj_reaching[-1]
-        for tf_ef_to_base in tf_ef_to_base_seq:
-            q_now = self.path_planner.solve_ik_skrobot(
-                tf_ef_to_base.to_skrobot_coords(),
-                "larm",
-                q_now,
-                consider_table=True,
-                consider_object=False,
-                consider_dummy=False,
+        def plan_whole(q_init) -> Optional[Trajectory]:
+            q_traj_reaching = self.path_planner.plan_path(
+                co_init, "larm", q_start=q_init, co_object=co_object
             )
-            if q_now is None:
-                reason = "IK failed without calibration"
-                raise RolloutAbortedException(reason)
+            if q_traj_reaching is None:
+                rospy.logwarn("(inside) planning failed")
+                return None
+
+            # plan grasping using uncalibrated pose
+            # this to check if the trajectory is not in collision
+            # at least without calibration
+            # NOTE that this is not used for actual execution
+            q_now = q_traj_reaching[-1]
+            for tf_ef_to_base in tf_ef_to_base_seq:
+                q_now = self.path_planner.solve_ik_skrobot(
+                    tf_ef_to_base.to_skrobot_coords(),
+                    "larm",
+                    q_now,
+                    consider_table=True,
+                    consider_object=False,
+                    consider_dummy=False,
+                )
+                if q_now is None:
+                    rospy.logwarn("(inside) IK failed")
+                    return None
+            return q_traj_reaching
+
+        q_traj_reaching = None
+        q_init = get_robot_state(self.pr2, joint_names)
+        for _ in range(100):
+            ret = plan_whole(q_init)
+            if ret is not None:
+                q_traj_reaching = ret
+                break
+        if q_traj_reaching is None:
+            raise RolloutAbortedException("planning failed")
 
         # now execute reaching and grasping
         times_reaching = [0.3] * 7 + [0.6] * 2 + [1.0]
