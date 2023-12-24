@@ -334,9 +334,16 @@ class AutomaticTrainerBase(ABC):
         rospy.loginfo(f"save trainer to {data_path}")
 
     @classmethod
-    def load(cls) -> "AutomaticTrainerBase":
+    def load(cls, i_episode_next: Optional[int] = None) -> "AutomaticTrainerBase":
         project_path = cls.get_project_path()
-        # load the one with largest episode number
+
+        if i_episode_next is not None:
+            max_episode_path = project_path / f"trainer_cache-{i_episode_next}.pkl"
+            assert max_episode_path.exists(), f"no cache file found at {max_episode_path}"
+            with open(max_episode_path, "rb") as f:
+                trainer = dill.load(f)
+            return trainer
+
         max_episode = -1
         max_episode_path = None
         for p in project_path.iterdir():
