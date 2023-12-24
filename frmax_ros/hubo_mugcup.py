@@ -1,4 +1,5 @@
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import ClassVar, List, Literal, Optional, Tuple, Union
 
@@ -16,6 +17,10 @@ from skmp.constraint import (
     CollFreeConst,
     ConfigPointConst,
     PoseConstraint,
+)
+from skmp.kinematics import (
+    ArticulatedCollisionKinematicsMap,
+    ArticulatedEndEffectorKinematicsMap,
 )
 from skmp.robot.pr2 import PR2Config
 from skmp.robot.utils import get_robot_state, set_robot_state
@@ -47,6 +52,28 @@ class PathPlanner:
         self.pr2 = pr2
         self.scene = scene
 
+    @lru_cache(maxsize=None)
+    def get_box_const(self, arm: Literal["larm", "rarm"], base_type: BaseType) -> BoxConst:
+        plan_conf = PR2Config(control_arm=arm, base_type=base_type)
+        box_const = plan_conf.get_box_const()
+        box_const.lb -= 1e-4
+        box_const.ub += 1e-4
+        return box_const
+
+    @lru_cache(maxsize=None)
+    def get_collision_kin(
+        self, arm: Literal["larm", "rarm"], base_type: BaseType
+    ) -> ArticulatedCollisionKinematicsMap:
+        plan_conf = PR2Config(control_arm=arm, base_type=base_type)
+        return plan_conf.get_collision_kin()
+
+    @lru_cache(maxsize=None)
+    def get_ef_kin(
+        self, arm: Literal["larm", "rarm"], base_type: BaseType
+    ) -> ArticulatedEndEffectorKinematicsMap:
+        plan_conf = PR2Config(control_arm=arm, base_type=base_type)
+        return plan_conf.get_endeffector_kin(rot_type=RotationType.XYZW)
+
     def _setup_constraints(
         self,
         target: Union[Coordinates, np.ndarray],
@@ -72,24 +99,18 @@ class PathPlanner:
             sdfs.append(self.scene.target_object.sdf)
         if len(sdfs) > 0:
             usdf = UnionSDF(sdfs)
-            colkin = plan_conf.get_collision_kin()
+            colkin = self.get_collision_kin(arm, base_type)
             ineq_const = CollFreeConst(colkin, usdf, self.pr2, only_closest_feature=True)
         else:
             ineq_const = None
 
-        plan_conf.get_control_joint_names()
-
-        efkin = plan_conf.get_endeffector_kin(rot_type=RotationType.XYZW)
-
+        efkin = self.get_ef_kin(arm, base_type)
         if isinstance(target, Coordinates):
             eq_const = PoseConstraint.from_skrobot_coords([target], efkin, self.pr2)
         else:
             eq_const = ConfigPointConst(target)
 
-        box_const = plan_conf.get_box_const()
-        box_const.lb -= 1e-4
-        box_const.ub += 1e-4
-
+        box_const = self.get_box_const(arm, base_type)
         return eq_const, ineq_const, box_const
 
     def is_feasible_target(
