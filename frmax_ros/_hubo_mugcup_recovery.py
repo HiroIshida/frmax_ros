@@ -121,7 +121,11 @@ class RecoveryMixIn:
             co_grasp.translate([0.07, 0.0, 0.0])
             return co_pregrasp, co_grasp
 
-        tf_object_to_base = self.get_tf_object_to_base()
+        try:
+            tf_object_to_base = self.get_tf_object_to_base()
+        except TimeoutError:
+            return False
+
         co_obj = tf_object_to_base.to_skrobot_coords()
         co_pregrasp, co_grasp = create_pregrasp_and_grasp_poses(co_obj)
 
