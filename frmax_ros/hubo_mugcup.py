@@ -230,7 +230,7 @@ class GraspingPlanerTrajectory:
     def __init__(self, param: np.ndarray):
         assert param.shape == (3 * 6 + 3,)
         n_split = 100
-        start = np.array([-0.06, -0.045, 0.0])
+        start = np.array([-0.055, -0.045, 0.0])
         goal = np.array([-0.005, -0.045, 0.0])
         diff_step = (goal - start) / (n_split - 1)
         traj_default = np.array([start + diff_step * i for i in range(n_split)])
@@ -426,6 +426,8 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         self.send_command_to_real_robot(q_traj_reaching, times_reaching, "larm")
 
         # calibrate
+        rospy.loginfo("calibrating")
+        self.ri.move_gripper("larm", 0.0)
         time.sleep(3.0)
         self.offset_prover.reset()
         try:
@@ -458,6 +460,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
             if q_now is None:
                 # go back to home pose
                 self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
+                self.ri.move_gripper("larm", 0.0)
                 reason = "IK failed with calibration"
                 raise RolloutAbortedException(reason, False)
             q_list.append(q_now)
@@ -478,14 +481,13 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         self.ri.wait_interpolation()
         time.sleep(0.5)
         annot = self.get_auto_annotation()
-        if annot is None:
-            reason = "ambiguous annotation"
-            raise RolloutAbortedException(reason, False)
+        assert annot is not None
         self.ri.move_gripper("larm", 0.08)
 
         # back to initial pose
         self.send_command_to_real_robot(q_traj_grasping[::-1], [0.5] * len(q_traj_grasping), "larm")
         self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
+        self.ri.move_gripper("larm", 0.0)
         return annot
 
 
