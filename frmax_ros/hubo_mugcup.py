@@ -37,7 +37,6 @@ from skrobot.model.primitives import MeshLink
 from skrobot.models.pr2 import PR2
 from skrobot.sdf import UnionSDF
 from tinyfk import BaseType, RotationType
-from utils import CoordinateTransform
 
 from frmax_ros._hubo_mugcup_recovery import RecoveryMixIn
 from frmax_ros.rollout import (
@@ -224,14 +223,25 @@ class PathPlanner:
 
 class GraspingPlanerTrajectory:
     seq_tf_ef_to_nominal: List[CoordinateTransform]
-    is_valid: bool
     pregrasp_gripper_pos: ClassVar[float] = 0.04
+
+    @classmethod
+    def get_goal_position_scaling(cls) -> np.ndarray:
+        xytheta_scaling = np.array([0.01, 0.01, np.deg2rad(20.0)])
+        goal_position_scaling = xytheta_scaling
+        return goal_position_scaling
+
+    @classmethod
+    def get_force_scaling(cls) -> np.ndarray:
+        xytheta_scaling = np.array([0.03, 0.03, np.deg2rad(20.0)])
+        force_scalineg = xytheta_scaling * 200
+        return force_scalineg
 
     def __init__(self, param: np.ndarray):
         assert param.shape == (3 * 6 + 3,)
         n_split = 100
-        start = np.array([-0.055, -0.045, 0.0])
-        goal = np.array([-0.005, -0.045, 0.0])
+        start = np.array([-0.06, -0.045, 0.0])
+        goal = np.array([-0.0, -0.045, 0.0])
         diff_step = (goal - start) / (n_split - 1)
         traj_default = np.array([start + diff_step * i for i in range(n_split)])
         n_weights_per_dim = 6
@@ -239,25 +249,13 @@ class GraspingPlanerTrajectory:
         dmp.imitate(np.linspace(0, 1, n_split), traj_default.copy())
         dmp.configure(start_y=traj_default[0])
 
-        xytheta_scaling = np.array([0.01, 0.01, np.deg2rad(20.0)])
-        goal_position_scaling = xytheta_scaling * 1.0
-
-        xytheta_scaling = np.array([0.03, 0.03, np.deg2rad(20.0)])
-        force_scalineg = xytheta_scaling * 300
         n_dim = 3
         n_goal_dim = 3
         W = param[:-n_goal_dim].reshape(n_dim, -1)
-        dmp.forcing_term.weights_[:, :] += W[:, :] * force_scalineg[:, None]
-        goal_param = param[-n_goal_dim:] * goal_position_scaling
+        dmp.forcing_term.weights_[:, :] += W[:, :] * self.get_force_scaling()[:, None]
+        goal_param = param[-n_goal_dim:] * self.get_goal_position_scaling()
         dmp.goal_y += goal_param
         _, planer_traj = dmp.open_loop()
-
-        is_valid = True
-        if np.any(np.abs(planer_traj[:, 2]) > np.deg2rad(45.0)):
-            is_valid = False
-        if np.abs(planer_traj[-1, 0] - planer_traj[0, 0]) > 0.1:
-            is_valid = False
-        self.is_valid = is_valid
 
         height = 0.075
         tf_seq = []
@@ -364,7 +362,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         self.scene.update(tf_object_to_base.to_skrobot_coords())
 
         x_pos, y_pos = tf_object_to_base.trans[:2]
-        if x_pos > 0.7 or y_pos > 0.2:
+        if x_pos > 0.56 or y_pos > 0.2:
             reason = f"invalid object position ({x_pos}, {y_pos})"
             raise RolloutAbortedException(reason, False)
 
@@ -435,7 +433,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         except TimeoutError:
             self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
             reason = "failed to get calibration"
-            raise RolloutAbortedException(reason, True)
+            raise RolloutAbortedException(reason, False)
         tf_efcalib_to_ef.src = "efcalib"
         tf_efcalib_to_ef.dest = "ef"
         tf_efcalib_to_base_seq = [
@@ -492,36 +490,39 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
 
 
 class MugcupGraspTrainer(AutomaticTrainerBase):
-    b_min: np.ndarray
-    b_max: np.ndarray
-
-    def __init__(self):
+    @classmethod
+    def init(cls) -> "MugcupGraspTrainer":
         ls_param = np.ones(21)
         ls_err = np.array([0.005, 0.005, np.deg2rad(5.0)])
-        self.b_min = np.array([-0.03, -0.03, -np.pi * 0.2])
-        self.b_max = np.array([0.03, 0.03, np.pi * 0.2])
         config = DGSamplerConfig(
             param_ls_reduction_rate=0.999,
             n_mc_param_search=30,
             c_svm=10000,
             integration_method="mc",
-            n_mc_integral=1000,
-            r_exploration=0.5,
+            n_mc_integral=300,
+            r_exploration=1.0,
             learning_rate=1.0,
         )
-        super().__init__(ls_param, ls_err, config, n_init_sample=10)
+        return super().init(ls_param, ls_err, config)  # type: ignore
 
     @staticmethod
     def get_rollout_executor() -> RolloutExecutorBase:
         return MugcupGraspRolloutExecutor()
 
-    def sample_situation(self) -> np.ndarray:
-        return np.random.uniform(self.b_min, self.b_max)
+    @staticmethod
+    def sample_situation() -> np.ndarray:
+        b_min = np.array([-0.03, -0.03, -np.pi * 0.2])
+        b_max = np.array([0.03, 0.03, np.pi * 0.2])
+        return np.random.uniform(b_min, b_max)
 
     @staticmethod
     def is_valid_param(param: np.ndarray) -> bool:
-        traj = GraspingPlanerTrajectory(param)
-        return traj.is_valid
+        scale = GraspingPlanerTrajectory.get_goal_position_scaling()
+        param_goal = param[-3:]
+        x, y, yaw = param_goal * scale
+        if abs(x) > 0.04 or abs(yaw) > np.deg2rad(45.0):
+            return False
+        return True
 
     @staticmethod
     def get_project_name() -> str:
@@ -542,6 +543,6 @@ if __name__ == "__main__":
     if args.resume:
         trainer = MugcupGraspTrainer.load(args.episode)
     else:
-        trainer = MugcupGraspTrainer()
+        trainer = MugcupGraspTrainer.init()
     for _ in range(300):
         trainer.next()

@@ -6,7 +6,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Tuple
 
 import dill
 import numpy as np
@@ -98,7 +98,7 @@ class PlanningScene:
 @dataclass
 class RolloutAbortedException(Exception):
     message: str
-    perceptual: bool
+    april_recognition: bool
 
 
 class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
@@ -188,7 +188,7 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
                 rospy.logwarn(e.message)
                 speak(f"automatic recovery start")
 
-                if not e.perceptual:
+                if not e.april_recognition:
                     if self.recover():
                         speak(f"automatic recovery finished")
                     try:
@@ -242,20 +242,22 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
             return self.get_manual_annotation()
 
 
+@dataclass
 class AutomaticTrainerBase(ABC):
     i_episode_next: int
     rollout_executor: RolloutExecutorBase
     sampler: DistributionGuidedSampler
 
-    def __init__(
-        self,
+    @classmethod
+    def init(
+        cls,
         ls_param: np.ndarray,
         ls_error: np.ndarray,
         sampler_config: DGSamplerConfig,
         n_init_sample: int = 10,
-    ):
+    ) -> "AutomaticTrainerBase":
 
-        project_path = self.get_project_path()
+        project_path = cls.get_project_path()
 
         if len(list(project_path.iterdir())) > 0:
             while True:
@@ -265,16 +267,15 @@ class AutomaticTrainerBase(ABC):
             for p in project_path.iterdir():
                 p.unlink()
 
-        speak("start trining")
-        self.i_episode_next = 0
-        rollout_executor = self.get_rollout_executor()
+        speak("start training")
+        rollout_executor = cls.get_rollout_executor()
         dof = rollout_executor.get_policy_dof()
         param_init = np.zeros(dof)
         X = [np.hstack([param_init, np.zeros(ls_error.size)])]
         Y = [True]
         for i in range(n_init_sample):
             speak(f"initial sampling number {i}")
-            e = self.sample_situation()
+            e = cls.sample_situation()
             label = rollout_executor.robust_rollout(param_init, e)
             X.append(np.hstack([param_init, e]))
             Y.append(label)
@@ -283,32 +284,24 @@ class AutomaticTrainerBase(ABC):
         speak("finish initial sampling")
 
         metric = CompositeMetric.from_ls_list([ls_param, ls_error])
-        self.rollout_executor = rollout_executor
-        self.sampler = DistributionGuidedSampler(
+        i_episode_next = 0
+        rollout_executor = rollout_executor
+        sampler = DistributionGuidedSampler(
             X,
             Y,
             metric,
             param_init,
             sampler_config,
-            situation_sampler=self.sample_situation,
-            is_valid_param=self.is_valid_param,
+            situation_sampler=cls.sample_situation,
+            is_valid_param=cls.is_valid_param,
+            use_prefacto_branched_ask=False,
         )
+        return cls(i_episode_next, rollout_executor, sampler)
 
     @staticmethod
     @abstractmethod
     def get_project_name() -> str:
         pass
-
-    def __getstate__(self):  # pickling
-        state = self.__dict__.copy()
-        executor_type = type(self.rollout_executor)
-        state["rollout_executor"] = executor_type
-        return state
-
-    def __setstate__(self, state):  # unpickling
-        executor_type = state["rollout_executor"]
-        state["rollout_executor"] = executor_type()
-        self.__dict__.update(state)
 
     @classmethod
     def get_project_path(cls) -> Path:
@@ -326,48 +319,64 @@ class AutomaticTrainerBase(ABC):
     def get_rollout_executor() -> RolloutExecutorBase:
         pass
 
+    @staticmethod
     @abstractmethod
-    def sample_situation(self) -> np.ndarray:
+    def sample_situation() -> np.ndarray:
         pass
 
+    @staticmethod
     @abstractmethod
-    def is_valid_param(self, param: np.ndarray) -> bool:
+    def is_valid_param(param: np.ndarray) -> bool:
         pass
 
     def save(self):
         project_path = self.get_project_path()
-        data_path = project_path / f"trainer_cache-{self.i_episode_next}.pkl"
+        data_path = project_path / f"sampler-{self.i_episode_next}.pkl"
         with open(data_path, "wb") as f:
-            dill.dump(self, f)
-        rospy.loginfo(f"save trainer to {data_path}")
+            dill.dump(self.sampler, f)
+        rospy.loginfo(f"save sampler to {data_path}")
 
     @classmethod
-    def load(cls, i_episode_next: Optional[int] = None) -> "AutomaticTrainerBase":
+    def load_sampler(
+        cls, i_episode_next: Optional[int] = None
+    ) -> Tuple[DistributionGuidedSampler, int]:
         project_path = cls.get_project_path()
 
         if i_episode_next is not None:
-            max_episode_path = project_path / f"trainer_cache-{i_episode_next}.pkl"
+            max_episode_path = project_path / f"sampler_cache-{i_episode_next}.pkl"
             assert max_episode_path.exists(), f"no cache file found at {max_episode_path}"
             with open(max_episode_path, "rb") as f:
-                trainer = dill.load(f)
-            return trainer
+                sampler = dill.load(f)
+            return sampler, i_episode_next
+        else:
+            max_episode = -1
+            max_episode_path = None
+            for p in project_path.iterdir():
+                if p.name.startswith("sampler_cache-"):
+                    episode = int(p.name.split("-")[-1].split(".")[0])
+                    if episode > max_episode:
+                        max_episode = episode
+                        max_episode_path = p
+            assert max_episode_path is not None, "no cache file found"
+            rospy.loginfo(f"load sampler from {max_episode_path}")
+            with open(max_episode_path, "rb") as f:
+                sampler = dill.load(f)
+            return sampler, max_episode
 
-        max_episode = -1
-        max_episode_path = None
-        for p in project_path.iterdir():
-            if p.name.startswith("trainer_cache-"):
-                episode = int(p.name.split("-")[-1].split(".")[0])
-                if episode > max_episode:
-                    max_episode = episode
-                    max_episode_path = p
-        assert max_episode_path is not None, "no cache file found"
-        rospy.loginfo(f"load trainer from {max_episode_path}")
-        with open(max_episode_path, "rb") as f:
-            trainer = dill.load(f)
-        return trainer
+    @classmethod
+    def load(cls, i_episode_next: Optional[int] = None):
+        sampler, i_episode_next = cls.load_sampler(i_episode_next)
+        rollout_executor = cls.get_rollout_executor()
+        return cls(i_episode_next, rollout_executor, sampler)
 
     def next(self) -> None:
         speak(f"start episode {self.i_episode_next}")
+
+        from pyinstrument import Profiler
+
+        profiler = Profiler()
+        profiler.start()
+
         x = self.sampler.ask()
         assert isinstance(x, np.ndarray)
         speak(f"determined next data point")
@@ -379,3 +388,6 @@ class AutomaticTrainerBase(ABC):
         self.sampler.tell(x, label)
         self.i_episode_next += 1
         self.save()
+
+        profiler.stop()
+        print(profiler.output_text(unicode=True, color=True))
