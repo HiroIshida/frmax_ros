@@ -92,7 +92,7 @@ class ObjectPoseProvider:
         if self._z_height is not None:
             return
         arr = np.array(list(pc2.read_points(msg, skip_nans=True, field_names=("x", "y", "z"))))
-        self._z_height = np.max(arr[:, 2])
+        self._z_height = np.sort(arr[:, 2])[-40]
 
     def reset(self):
         self.queue = AverageQueue(max_size=10)
