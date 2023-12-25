@@ -15,7 +15,8 @@ from skrobot.model.primitives import Box, Cylinder
 from skrobot.models.pr2 import PR2
 from skrobot.sdf import UnionSDF
 from tinyfk import RotationType
-from utils import CoordinateTransform
+
+from frmax_ros.utils import CoordinateTransform
 
 
 class PlanningCongig:
@@ -105,8 +106,8 @@ class RecoveryMixIn:
     def recover(self) -> bool:
         self.initialize_robot()
 
-        xy_desired = np.array([0.5, 0.05])
-        yaw_desired = -np.pi * 0.4
+        xy_desired = np.array([0.45, +0.15])
+        yaw_desired = -np.pi * 0.65
 
         assert yaw_desired is None or (-np.pi < yaw_desired < 0.0)
 
@@ -118,7 +119,7 @@ class RecoveryMixIn:
             co_pregrasp.rotate(-np.pi * 0.5, "x")
 
             co_grasp = co_pregrasp.copy_worldcoords()
-            co_grasp.translate([0.07, 0.0, 0.0])
+            co_grasp.translate([0.08, 0.0, 0.0])
             return co_pregrasp, co_grasp
 
         try:

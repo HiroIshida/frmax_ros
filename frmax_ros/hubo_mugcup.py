@@ -316,7 +316,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         super().__init__(mugcup)
 
         self.path_planner = PathPlanner(self.pr2, self.scene)
-        self.tf_object_to_april = CoordinateTransform(np.array([0.013, -0.004, -0.095]), np.eye(3))
+        self.tf_object_to_april = CoordinateTransform(np.array([0.022, -0.00, -0.095]), np.eye(3))
 
     def initialize_robot(self):
         self.pr2.reset_manip_pose()
@@ -362,7 +362,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         self.scene.update(tf_object_to_base.to_skrobot_coords())
 
         x_pos, y_pos = tf_object_to_base.trans[:2]
-        if x_pos > 0.56 or y_pos > 0.2:
+        if x_pos > 0.53 or y_pos > 0.2:
             reason = f"invalid object position ({x_pos}, {y_pos})"
             raise RolloutAbortedException(reason, False)
 
@@ -419,8 +419,8 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
             raise RolloutAbortedException("planning failed", False)
 
         # now execute reaching and grasping
-        times_reaching = [0.3] * 7 + [0.6] * 2 + [1.0]
-        q_traj_reaching = q_traj_reaching.resample(10).numpy()
+        times_reaching = [0.1] * 17 + [0.6] * 2 + [1.0]
+        q_traj_reaching = q_traj_reaching.resample(20).numpy()
         self.send_command_to_real_robot(q_traj_reaching, times_reaching, "larm")
 
         # calibrate
@@ -466,16 +466,16 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         q_traj_grasping = np.array(q_list)
         set_robot_state(self.pr2, joint_names, q_traj_grasping[-1])
 
-        times_grasping = [0.5] * len(q_traj_grasping)
+        times_grasping = [0.3] * len(q_traj_grasping)
         self.send_command_to_real_robot(q_traj_grasping, times_grasping, "larm")
         self.ri.move_gripper("larm", 0.0, effort=100)
 
         # shake back and force
         av_now = self.pr2.angle_vector()
         self.pr2.larm.move_end_pos([-0.03, 0.0, 0.0])
-        self.ri.angle_vector(self.pr2.angle_vector(), time_scale=1.0, time=1.0)
+        self.ri.angle_vector(self.pr2.angle_vector(), time_scale=1.0, time=0.5)
         self.ri.wait_interpolation()
-        self.ri.angle_vector(av_now, time_scale=1.0, time=1.0)
+        self.ri.angle_vector(av_now, time_scale=1.0, time=0.5)
         self.ri.wait_interpolation()
         time.sleep(0.5)
         annot = self.get_auto_annotation()
@@ -533,6 +533,7 @@ if __name__ == "__main__":
     # e = MugcupGraspRolloutExecutor()
     # e.recover()
     # e.rollout(np.zeros(21), np.zeros(3))
+
     import argparse
 
     parser = argparse.ArgumentParser()
