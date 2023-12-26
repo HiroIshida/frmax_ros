@@ -245,6 +245,7 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
 @dataclass
 class AutomaticTrainerBase(ABC):
     i_episode_next: int
+    i_refine_episode_next: int
     rollout_executor: RolloutExecutorBase
     sampler: DistributionGuidedSampler
 
@@ -284,7 +285,6 @@ class AutomaticTrainerBase(ABC):
         speak("finish initial sampling")
 
         metric = CompositeMetric.from_ls_list([ls_param, ls_error])
-        i_episode_next = 0
         rollout_executor = rollout_executor
         sampler = DistributionGuidedSampler(
             X,
@@ -296,7 +296,7 @@ class AutomaticTrainerBase(ABC):
             is_valid_param=cls.is_valid_param,
             use_prefacto_branched_ask=False,
         )
-        return cls(i_episode_next, rollout_executor, sampler)
+        return cls(0, 0, rollout_executor, sampler)
 
     @staticmethod
     @abstractmethod
@@ -330,8 +330,17 @@ class AutomaticTrainerBase(ABC):
         pass
 
     def save(self):
+        assert self.i_refine_episode_next == 0
         project_path = self.get_project_path()
         data_path = project_path / f"sampler-{self.i_episode_next}.pkl"
+        with open(data_path, "wb") as f:
+            dill.dump(self.sampler, f)
+        rospy.loginfo(f"save sampler to {data_path}")
+
+    def save_refined(self):
+        assert self.i_refine_episode_next > 0
+        project_path = self.get_project_path()
+        data_path = project_path / f"refined-{self.i_episode_next}-{self.i_refine_episode_next}.pkl"
         with open(data_path, "wb") as f:
             dill.dump(self.sampler, f)
         rospy.loginfo(f"save sampler to {data_path}")
@@ -364,12 +373,45 @@ class AutomaticTrainerBase(ABC):
             return sampler, max_episode
 
     @classmethod
+    def load_refined_sampler(cls) -> Tuple[DistributionGuidedSampler, int, int]:
+        project_path = cls.get_project_path()
+        d = {}
+        for p in project_path.iterdir():
+            pattern = r"^refined-(\d+)-(\d+)\.pkl$"
+            match = re.match(pattern, p.name)
+            if match is not None:
+                i_episode_next = int(match.group(1))
+                if i_episode_next not in d:
+                    d[i_episode_next] = []
+                i_refine_episode_next = int(match.group(2))
+                d[i_episode_next].append(i_refine_episode_next)
+
+        if len(d.keys()) == 0:
+            raise FileNotFoundError("no cache file found")
+        elif len(d.keys()) > 1:
+            raise ValueError("multiple cache files found")
+
+        i_episode_next = list(d.keys())[0]
+        i_refine_episode_next = max(d[i_episode_next])
+        latest_episode_path = project_path / f"refined-{i_episode_next}-{i_refine_episode_next}.pkl"
+        assert latest_episode_path.exists(), f"no cache file found at {latest_episode_path}"
+        with open(latest_episode_path, "rb") as f:
+            sampler = dill.load(f)
+        return sampler, i_episode_next, i_refine_episode_next
+
+    @classmethod
     def load(cls, i_episode_next: Optional[int] = None):
         sampler, i_episode_next = cls.load_sampler(i_episode_next)
         rollout_executor = cls.get_rollout_executor()
-        return cls(i_episode_next, rollout_executor, sampler)
+        return cls(i_episode_next, 0, rollout_executor, sampler)
 
-    def next(self) -> None:
+    @classmethod
+    def load_refined(cls):
+        sampler, i_episode_next, i_refine_episode_next = cls.load_refined_sampler()
+        rollout_executor = cls.get_rollout_executor()
+        return cls(i_episode_next, i_refine_episode_next, rollout_executor, sampler)
+
+    def step(self) -> None:
         speak(f"start episode {self.i_episode_next}")
 
         from pyinstrument import Profiler
@@ -391,3 +433,20 @@ class AutomaticTrainerBase(ABC):
 
         profiler.stop()
         print(profiler.output_text(unicode=True, color=True))
+
+    def step_refinement(self) -> None:
+        speak(f"start refinement {self.i_refine_episode_next}")
+
+        if self.sampler.count_additional == 0:
+            param_opt = self.sampler.optimize(200, method="cmaes")
+        else:
+            param_opt = self.sampler.get_optimal_after_additional()
+        x = self.sampler.ask_additional(param_opt)
+        param_dof = self.rollout_executor.get_policy_dof()
+        param, error = x[:param_dof], x[param_dof:]
+        label = self.rollout_executor.robust_rollout(param, error)
+        speak(f"label {label}")
+        time.sleep(1.0)
+        self.sampler.tell(x, label)
+        self.i_refine_episode_next += 1
+        self.save_refined()

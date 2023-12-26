@@ -538,12 +538,21 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", action="store_true", help="resume")
+    parser.add_argument("--refine", action="store_true", help="refine")
     parser.add_argument("--episode", type=int, help="episode to load")
     args = parser.parse_args()
     np.random.seed(0)
-    if args.resume:
-        trainer = MugcupGraspTrainer.load(args.episode)
+    if args.refine:
+        try:
+            trainer = MugcupGraspTrainer.load_refined()
+        except FileNotFoundError:
+            trainer = MugcupGraspTrainer.load()
+        for _ in range(50):
+            trainer.step_refinement()
     else:
-        trainer = MugcupGraspTrainer.init()
-    for _ in range(300):
-        trainer.next()
+        if args.resume:
+            trainer = MugcupGraspTrainer.load(args.episode)
+        else:
+            trainer = MugcupGraspTrainer.init()
+        for _ in range(300):
+            trainer.step()
