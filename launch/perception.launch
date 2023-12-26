@@ -1,0 +1,5 @@
+<launch>
+  <include file="$(find frmax_ros)/launch/kinect_april_detection.launch" />
+  <include file="$(find frmax_ros)/launch/pointcloud_common.launch" />
+  <include file="$(find frmax_ros)/launch/yellow_tape.launch"/>
+</launch>

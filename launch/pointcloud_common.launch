@@ -7,7 +7,7 @@
   <arg name="input_image" default="/kinect_head/rgb/image_rect_color"/>
   <arg name="input_depth" default="/kinect_head/depth_registered/image"/>
   <arg name="input_camera_info" default="/kinect_head/depth_registered/camera_info"/>
-  <arg name="namespace" default="perception" />
+  <arg name="namespace" default="remote" />
 
   <arg name="_input_image" default="/$(arg namespace)/decompressed_image"/>
   <arg name="_input_depth" default="/$(arg namespace)/decompressed_depth"/>
@@ -43,45 +43,31 @@
       </rosparam>
     </node>
 
-    <node name="boxfiler" pkg="nodelet" type="nodelet"
+
+    <node name="attension_clipper" pkg="nodelet" type="nodelet"
       args="standalone jsk_pcl/AttentionClipper"
       output="screen">
       <remap from="~input/points" to="tf_transform/output"/>
       <rosparam>
-          use_multiple_attention: false
-          dimension_x: 0.7
-          dimension_y: 0.8
-          dimension_z: 0.4
-          initial_pos: [0.5, 0.0, 0.95]
+        use_multiple_attention: false
+        dimension_x: 0.15
+        dimension_y: 0.15
+        dimension_z: 0.15
+        frame_id: april
+        initial_pos: [0.0, 0.0, 0.0]
       </rosparam>
-      <param name="frame_id" value="base_footprint" />
     </node>
 
     <node name="ExtractIndices" pkg="nodelet" type="nodelet"
       args="standalone jsk_pcl/ExtractIndices"
       output="screen">
       <remap from="~input" to="tf_transform/output"/>
-      <remap from="~indices" to="boxfiler/output/point_indices"/>
+      <remap from="~indices" to="attension_clipper/output/point_indices"/>
       <rosparam>
         keep_organized: true
       </rosparam>
     </node>
 
-    <node name="hsi_filter" pkg="nodelet" type="nodelet"
-      args="standalone jsk_pcl/HSIColorFilter" 
-      output="screen">
-      <remap from="~input" to="/perception/ExtractIndices/output" />
-      <rosparam>
-        use_indices: false
-        keep_organized: false
-        h_limit_max: 127
-        h_limit_min: 27
-        s_limit_max: 126
-        s_limit_min: 0
-        i_limit_max: 255
-        i_limit_min: 0
-      </rosparam>
-    </node>
-    <node name="pose_detector" pkg="frmax_ros" type="cup_pose_publisher.py" output="screen"/>
+
   </group>
 </launch>

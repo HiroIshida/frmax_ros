@@ -13,7 +13,5 @@
     <remap from="in" to="/kinect_head/rgb/image_rect_color"/>
     <remap from="out" to="/remote/kinect_head/rgb/image_rect_color"/>
   </node>
-
-  <node pkg="frmax_ros" type="april_pose_publisher.py" name="april_pose_publisher" output="screen"/>
   <node pkg="frmax_ros" type="dummy_camera_info_publisher.py" name="camera_info_publisher" />
 </launch>
