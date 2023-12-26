@@ -1,26 +1,18 @@
-import rospy
 import time
+from pathlib import Path
 
 import numpy as np
-from skrobot.model.primitives import Box, PointCloudLink, Axis, MeshLink
+import rospkg
+import rospy
+import trimesh
+from skrobot.model.primitives import Axis, Box, MeshLink, PointCloudLink
 from skrobot.viewers import TrimeshSceneViewer
+
 from frmax_ros.node import ObjectPoseProvider, PointCloudProvider
 from frmax_ros.utils import CoordinateTransform
 
-import argparse
-import matplotlib.pyplot as plt
-import numpy as np
-import tqdm
-from pathlib import Path
-from tempfile import TemporaryDirectory
-import pickle
-import hashlib
-import time
-import rospkg
-import trimesh
-
 rospack = rospkg.RosPack()
-pkg_path = Path(rospack.get_path('frmax_ros'))
+pkg_path = Path(rospack.get_path("frmax_ros"))
 mug_model_path = pkg_path / "model" / "hubolab_mug.stl"
 mesh = trimesh.load_mesh(mug_model_path)
 mesh_link = MeshLink(mesh, with_sdf=True)
