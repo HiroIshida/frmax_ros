@@ -430,7 +430,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         rospy.loginfo("calibrating")
         self.ri.move_gripper("larm", 0.0)
         self.offset_prover.reset()
-        self.pose_provider.reset()
+        self.pose_provider.reset(acceptable_xy_std=0.005, acceptable_theta_std=np.deg2rad(5.0))
         time.sleep(3.0)
         try:
             offset = self.offset_prover.get_offset()
@@ -442,7 +442,9 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
             tf_object_to_base_again = self.get_tf_object_to_base(reset=False)
             # if the object is not in the same position, this means the robot collided
             # with the object. consider execution fails
-            distance = np.linalg.norm(tf_object_to_base_again.trans - tf_object_to_base.trans)
+            distance = np.linalg.norm(
+                tf_object_to_base_again.trans[:2] - tf_object_to_base.trans[:2]
+            )
             yaw_new = rpy_angle(tf_object_to_base_again.rot)[0][0]
             yaw_original = rpy_angle(tf_object_to_base.rot)[0][0]
             rospy.loginfo(f"object moved from {distance}m / {abs(yaw_new - yaw_original)}rad")

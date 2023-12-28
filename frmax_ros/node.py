@@ -76,6 +76,8 @@ class ObjectPoseProvider:
     queue: AverageQueue
     _tf_april_to_base: Optional[CoordinateTransform]
     _z_height: Optional[float]
+    _acceptable_xy_std: float
+    _acceptable_theta_std: float
 
     def __init__(self):
         self.listener = tf.TransformListener()
@@ -87,6 +89,8 @@ class ObjectPoseProvider:
         self.sub_points = Subscriber(
             "/remote/ExtractIndices/output", PointCloud2, self.callback_points
         )
+        self._acceptable_xy_std = 0.005
+        self._acceptable_theta_std = 0.03
 
     def callback_points(self, msg: PointCloud2) -> None:
         if self._z_height is not None:
@@ -94,10 +98,12 @@ class ObjectPoseProvider:
         arr = np.array(list(pc2.read_points(msg, skip_nans=True, field_names=("x", "y", "z"))))
         self._z_height = np.sort(arr[:, 2])[-40]
 
-    def reset(self):
+    def reset(self, acceptable_xy_std: float = 0.005, acceptable_theta_std: float = 0.03) -> None:
         self.queue = AverageQueue(max_size=10)
         self._tf_april_to_base = None
         self._z_height = None
+        self._acceptable_xy_std = acceptable_xy_std
+        self._acceptable_theta_std = acceptable_theta_std
 
     def get_tf_object_to_base(self, timeout: float = 10.0) -> CoordinateTransform:
         if self._tf_april_to_base is not None:
@@ -162,7 +168,7 @@ class ObjectPoseProvider:
         std = self.queue.get_std()
         xy_std = std[:2]
         theta_std = std[3]
-        if np.any(xy_std > 0.005) or theta_std > 0.03:
+        if np.any(xy_std > self._acceptable_xy_std) or theta_std > self._acceptable_theta_std:
             rospy.loginfo("TF is too noisy: {}".format(std))
             return
 
