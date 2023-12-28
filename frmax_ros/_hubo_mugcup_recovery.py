@@ -119,7 +119,7 @@ class RecoveryMixIn:
             co_pregrasp.rotate(-np.pi * 0.5, "x")
 
             co_grasp = co_pregrasp.copy_worldcoords()
-            co_grasp.translate([0.07, 0.0, 0.0])
+            co_grasp.translate([0.06, 0.0, 0.0])
             return co_pregrasp, co_grasp
 
         try:

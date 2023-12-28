@@ -469,7 +469,8 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
 
         # shake back and force
         av_now = self.pr2.angle_vector()
-        self.pr2.larm.move_end_pos([-0.03, 0.0, 0.0])
+        self.pr2.larm.move_end_pos([-0.06, 0.0, 0.0])
+        self.pr2.larm.move_end_pos([0.0, 0.0, 0.025], wrt="world")  # slide to z
         self.ri.angle_vector(self.pr2.angle_vector(), time_scale=1.0, time=0.5)
         self.ri.wait_interpolation()
         self.ri.angle_vector(av_now, time_scale=1.0, time=0.5)

@@ -36,7 +36,7 @@ def speak(message: str) -> None:
     subprocess.call('echo "{}" | festival --tts'.format(message), shell=True)
     sound_client = SoundClient()
     try:
-        sound_client.say(message)
+        sound_client.say(message, volume=0.5)
     except:
         print("sound client error")
 
