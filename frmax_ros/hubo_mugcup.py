@@ -33,6 +33,7 @@ from skmp.solver.interface import Problem
 from skmp.solver.ompl_solver import OMPLSolver, OMPLSolverConfig
 from skmp.trajectory import Trajectory
 from skrobot.coordinates import Coordinates
+from skrobot.coordinates.math import rpy_angle
 from skrobot.model.primitives import MeshLink
 from skrobot.models.pr2 import PR2
 from skrobot.sdf import UnionSDF
@@ -44,6 +45,7 @@ from frmax_ros.rollout import (
     PlanningScene,
     RolloutAbortedException,
     RolloutExecutorBase,
+    speak,
 )
 from frmax_ros.utils import CoordinateTransform
 
@@ -331,8 +333,9 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         self.ri.move_gripper("rarm", self.pregrasp_gripper_pos)
         self.ri.wait_interpolation()
 
-    def get_tf_object_to_base(self) -> CoordinateTransform:
-        self.pose_provider.reset()
+    def get_tf_object_to_base(self, reset: bool = True) -> CoordinateTransform:
+        if reset:
+            self.pose_provider.reset()
         tf_april_to_base = self.pose_provider.get_tf_object_to_base()
         tf_object_to_april = CoordinateTransform(
             np.array([0.013, -0.004, -0.095]), np.eye(3), "object", "april"
@@ -423,17 +426,35 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         q_traj_reaching = q_traj_reaching.resample(20).numpy()
         self.send_command_to_real_robot(q_traj_reaching, times_reaching, "larm")
 
-        # calibrate
+        # calibrate and check pose again
         rospy.loginfo("calibrating")
         self.ri.move_gripper("larm", 0.0)
-        time.sleep(3.0)
         self.offset_prover.reset()
+        self.pose_provider.reset()
+        time.sleep(3.0)
         try:
             offset = self.offset_prover.get_offset()
         except TimeoutError:
             self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
             reason = "failed to get calibration"
             raise RolloutAbortedException(reason, False)
+        try:
+            tf_object_to_base_again = self.get_tf_object_to_base(reset=False)
+            # if the object is not in the same position, this means the robot collided
+            # with the object. consider execution fails
+            distance = np.linalg.norm(tf_object_to_base_again.trans - tf_object_to_base.trans)
+            yaw_new = rpy_angle(tf_object_to_base_again.rot)[0][0]
+            yaw_original = rpy_angle(tf_object_to_base.rot)[0][0]
+            rospy.loginfo(f"object moved from {distance}m / {abs(yaw_new - yaw_original)}rad")
+            if distance > 0.01 or abs(yaw_new - yaw_original) > np.deg2rad(5.0):
+                self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
+                speak("object moved! This means the robot may have collided with the object")
+                raise RolloutAbortedException("object moved", False)
+
+        except TimeoutError:
+            self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
+            reason = "failed to get object pose"
+            raise RolloutAbortedException(reason, True)
 
         # move to pregrasp
         self.ri.move_gripper("larm", planer_traj.pregrasp_gripper_pos)
