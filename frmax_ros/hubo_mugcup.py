@@ -429,25 +429,22 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         time.sleep(3.0)
         self.offset_prover.reset()
         try:
-            tf_efcalib_to_ef = self.offset_prover.get_cloudtape_to_tape().inverse()
+            offset = self.offset_prover.get_offset()
         except TimeoutError:
             self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
             reason = "failed to get calibration"
             raise RolloutAbortedException(reason, False)
-        tf_efcalib_to_ef.src = "efcalib"
-        tf_efcalib_to_ef.dest = "ef"
-        tf_efcalib_to_base_seq = [
-            tf_efcalib_to_ef * tf_ef_to_base for tf_ef_to_base in tf_ef_to_base_seq
-        ]
 
         # move to pregrasp
         self.ri.move_gripper("larm", planer_traj.pregrasp_gripper_pos)
 
         # plan grasping using the calibrated pose
         q_list = [q_traj_reaching[-1]]
-        for tf_ef_to_base in tf_efcalib_to_base_seq:
+        for tf_ef_to_base in tf_ef_to_base_seq:
+            co = tf_ef_to_base.to_skrobot_coords()
+            co.translate(-offset, wrt="world")
             q_now = self.path_planner.solve_ik(
-                tf_ef_to_base.to_skrobot_coords(),
+                co,
                 "larm",
                 q_list[-1],
                 consider_table=False,

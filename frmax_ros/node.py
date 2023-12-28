@@ -234,7 +234,7 @@ class YellowTapeOffsetProvider:
     viewer: Optional[TrimeshSceneViewer]
     visualize: bool
     method: str
-    _tf_cloudtape_to_tape: Optional[CoordinateTransform]
+    _offset: Optional[np.ndarray]
 
     def __init__(self, visualize: bool = False, method: str = "naive"):
         self.pr2 = PR2()
@@ -248,28 +248,28 @@ class YellowTapeOffsetProvider:
         self.viewer = None
         self.visualize = visualize
         self.method = method
-        self._tf_cloudtape_to_tape = None
+        self._offset = None
 
-    def get_cloudtape_to_tape(self, timeout: float = 5.0) -> CoordinateTransform:
-        if self._tf_cloudtape_to_tape is not None:
-            return self._tf_cloudtape_to_tape
+    def get_offset(self, timeout: float = 5.0) -> np.ndarray:
+        if self._offset is not None:
+            return self._offset
 
         ts = time.time()
-        while self._tf_cloudtape_to_tape is None:
+        while self._offset is None:
             if time.time() - ts > timeout:
-                raise TimeoutError("Timeout waiting for tf_cloudtape_to_tape")
+                raise TimeoutError("Timeout waiting for _offset")
             rospy.sleep(0.05)
-            rospy.loginfo("Waiting for tf_cloudtape_to_tape")
-        return self._tf_cloudtape_to_tape
+            rospy.loginfo("Waiting for _offset")
+        return self._offset
 
     def reset(self) -> None:
-        self._tf_cloudtape_to_tape = None
-        rospy.loginfo("tf_cloudtape_to_tape is reset")
+        self._offset = None
+        rospy.loginfo("offset is reset")
 
     def callback_pointcloud_colored(
         self, pcloud_msg: PointCloud2, joint_state_msg: JointState
     ) -> None:
-        if self._tf_cloudtape_to_tape is not None:
+        if self._offset is not None:
             return
         table = {name: angle for name, angle in zip(joint_state_msg.name, joint_state_msg.position)}
         [self.pr2.__dict__[name].joint_angle(angle) for name, angle in table.items()]
@@ -306,12 +306,8 @@ class YellowTapeOffsetProvider:
         mean = np.mean(points_clustered, axis=0)
         co_from_cloud = Coordinates(pos=mean, rot=co_actual.worldrot())
 
-        tf_cloudtape_to_base = CoordinateTransform.from_skrobot_coords(
-            co_from_cloud, "cloud_tape", "base"
-        )
-        tf_tape_to_base = CoordinateTransform.from_skrobot_coords(co_actual, "tape", "base")
-        self._tf_cloudtape_to_tape = tf_cloudtape_to_base * tf_tape_to_base.inverse()
-        rospy.loginfo(f"tf_cloudtape_to_tape: {self._tf_cloudtape_to_tape}")
+        self._offset = co_from_cloud.worldpos() - co_actual.worldpos()
+        rospy.loginfo(f"offset: {self._offset}")
 
         if self.viewer is None and self.visualize:
             self.viewer = TrimeshSceneViewer()
