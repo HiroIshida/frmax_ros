@@ -78,7 +78,9 @@ class PathPlanner:
         self, arm: Literal["larm", "rarm"], base_type: BaseType
     ) -> ArticulatedEndEffectorKinematicsMap:
         plan_conf = PR2Config(control_arm=arm, base_type=base_type)
-        return plan_conf.get_endeffector_kin(rot_type=RotationType.XYZW)
+        return plan_conf.get_endeffector_kin(
+            rot_type=RotationType.XYZW
+        )  # 2023/12/30: found that XYZW was not propagated. Fixed  at skmp's 6bd8515 but not sure it works after this commit.
 
     def _setup_constraints(
         self,
