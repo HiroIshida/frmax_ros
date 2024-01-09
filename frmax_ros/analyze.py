@@ -9,7 +9,7 @@ import numpy as np
 import tqdm
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 
-from frmax_ros.hubo_mugcup import MugcupGraspTrainer
+from frmax_ros.hubo_mugcup import GraspingPlanerTrajectory, MugcupGraspTrainer
 from frmax_ros.rollout import AutomaticTrainerBase
 
 
@@ -54,6 +54,60 @@ def get_optimization_history(
             param_opt_seq.append(param_opt)
             volume_opt_seq.append(volume_opt)
     return np.array(param_opt_seq), np.array(volume_opt_seq)
+
+
+def get_optimal_traj_history(
+    trainer_type: Type[AutomaticTrainerBase],
+) -> np.ndarray:  # (N, T, 3)
+    opt_history = get_optimization_history(trainer_type)
+    param_opt_hist, _ = opt_history
+
+    pose_traj_hist = []
+    for param in param_opt_hist:
+        traj = GraspingPlanerTrajectory(param, dt=0.05, im_using_this_in_demo=False)
+        pose_list = []
+        for tf in traj.seq_tf_ef_to_nominal:
+            pose = tf.to_pose3d()
+            pose_list.append(pose)
+        pose_traj_hist.append(pose_list)
+    return np.array(pose_traj_hist)
+
+
+def visualize_optimal_traj_history(trainer_type: Type[AutomaticTrainerBase]):
+    traj_hist = get_optimal_traj_history(trainer_type)
+    n = len(traj_hist)
+    planer_traj_list = traj_hist[[0, 50, 150, 250, 350, n - 1]]
+    fig, ax = plt.subplots()
+
+    # plot circle patch
+    circle = plt.Circle((0, 0), 0.04, color="linen", fill=True, alpha=1.0)
+    ax.add_artist(circle)
+
+    # draw rectangle patch
+    rect = plt.Rectangle((-0.0075, -0.075), 0.015, 0.04, color="linen", fill=True, alpha=1.0)
+    ax.add_artist(rect)
+
+    # draw arrow rigin and x, y axis with color red and blue arrows
+    ax.arrow(0, 0, 0.02, 0, head_width=0.005, head_length=0.005, fc="r", ec="r")
+    ax.arrow(0, 0, 0, 0.02, head_width=0.005, head_length=0.005, fc="b", ec="g")
+
+    for planer_traj in planer_traj_list:
+        x = planer_traj[:, 0]
+        y = planer_traj[:, 1]
+        yaw = planer_traj[:, 2]
+        dx = np.cos(yaw) * 0.006
+        dy = np.sin(yaw) * 0.006
+
+        for i in range(len(x)):
+            ax.plot([x[i], x[i] + dx[i]], [y[i], y[i] + dy[i]], color="blue", lw=0.5)
+
+        ax.plot(planer_traj[:, 0], planer_traj[:, 1], label="planer", color="gray", lw=0.5)
+    ax.set_xlim([-0.075, 0.05])
+    ax.set_ylim([-0.08, 0.03])
+    ax.set_aspect("equal")
+    figure_path = trainer_type.get_project_path() / "figures"
+    figure_path.mkdir(exist_ok=True)
+    plt.savefig(figure_path / "optimal_traj_history.png", dpi=300)
 
 
 def visualize_feasible_region(trainer_type: Type[AutomaticTrainerBase], sliced_plot: bool = False):

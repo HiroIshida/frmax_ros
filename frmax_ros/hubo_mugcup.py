@@ -241,7 +241,10 @@ class GraspingPlanerTrajectory:
         force_scalineg = xytheta_scaling * 200
         return force_scalineg
 
-    def __init__(self, param: np.ndarray):
+    def __init__(self, param: np.ndarray, dt: float = 0.1, *, im_using_this_in_demo: bool = True):
+        if dt != 0.1:
+            # double check
+            assert not im_using_this_in_demo
         assert param.shape == (3 * 6 + 3,)
         n_split = 100
         start = np.array([-0.06, -0.045, 0.0])
@@ -249,7 +252,7 @@ class GraspingPlanerTrajectory:
         diff_step = (goal - start) / (n_split - 1)
         traj_default = np.array([start + diff_step * i for i in range(n_split)])
         n_weights_per_dim = 6
-        dmp = DMP(3, execution_time=1.0, n_weights_per_dim=n_weights_per_dim, dt=0.1)
+        dmp = DMP(3, execution_time=1.0, n_weights_per_dim=n_weights_per_dim, dt=dt)
         dmp.imitate(np.linspace(0, 1, n_split), traj_default.copy())
         dmp.configure(start_y=traj_default[0])
 
