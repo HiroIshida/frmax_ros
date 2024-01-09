@@ -110,6 +110,19 @@ def visualize_optimal_traj_history(trainer_type: Type[AutomaticTrainerBase]):
     plt.savefig(figure_path / "optimal_traj_history.png", dpi=300)
 
 
+def visualize_estimated_volume_history(trainer_type: Type[AutomaticTrainerBase]):
+    param_opt_seq, volume_opt_seq = get_optimization_history(MugcupGraspTrainer)
+    fig, ax = plt.subplots()
+    ax.plot(volume_opt_seq)
+    ax.set_xlabel("iteration [-]")
+    ax.set_ylabel("coverage rate [-]")
+    fig.set_size_inches(4, 4)
+    plt.tight_layout()
+    figure_path = trainer_type.get_project_path() / "figures"
+    figure_path.mkdir(exist_ok=True)
+    plt.savefig(figure_path / "estimated_volume_history.png", dpi=300)
+
+
 def visualize_feasible_region(trainer_type: Type[AutomaticTrainerBase], sliced_plot: bool = False):
     sampler, _, _ = trainer_type.load_refined_sampler()
 
