@@ -1,4 +1,5 @@
 import pickle
+from concurrent.futures import ProcessPoolExecutor
 from hashlib import md5
 from typing import Tuple, Type
 
@@ -34,17 +35,24 @@ def optimize_volume(
         return best_param, est_volume
 
 
+def _optimize_volume(arg) -> Tuple[np.ndarray, float]:
+    trainer_type, n_iter = arg
+    return optimize_volume(trainer_type, n_iter)
+
+
 def get_optimization_history(
     trainer_type: Type[AutomaticTrainerBase],
 ) -> Tuple[np.ndarray, np.ndarray]:
     _, n_iter = trainer_type.load_sampler()
+
     param_opt_seq = []
     volume_opt_seq = []
-
-    for i in tqdm.tqdm(range(1, n_iter + 1)):
-        param_opt, volume_opt = optimize_volume(trainer_type, i)
-        param_opt_seq.append(param_opt)
-        volume_opt_seq.append(volume_opt)
+    with ProcessPoolExecutor(8) as executor:
+        args = [(trainer_type, i) for i in range(1, n_iter + 1)]
+        results = list(tqdm.tqdm(executor.map(_optimize_volume, args), total=len(args)))
+        for param_opt, volume_opt in results:
+            param_opt_seq.append(param_opt)
+            volume_opt_seq.append(volume_opt)
     return np.array(param_opt_seq), np.array(volume_opt_seq)
 
 
