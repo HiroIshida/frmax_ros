@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tqdm
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from skimage import measure
 
 from frmax_ros.hubo_mugcup import GraspingPlanerTrajectory, MugcupGraspTrainer
 from frmax_ros.rollout import AutomaticTrainerBase
@@ -73,17 +75,12 @@ def get_optimal_traj_history(
     return np.array(pose_traj_hist)
 
 
-def visualize_optimal_traj_history(trainer_type: Type[AutomaticTrainerBase]):
-    traj_hist = get_optimal_traj_history(trainer_type)
-    n = len(traj_hist)
-    planer_traj_list = traj_hist[[0, 50, 150, 250, 350, n - 1]]
-    fig, ax = plt.subplots()
-
-    # plot circle patch
+def plot_mugcup(ax):
+    # body
     circle = plt.Circle((0, 0), 0.04, color="linen", fill=True, alpha=1.0)
     ax.add_artist(circle)
 
-    # draw rectangle patch
+    # handle
     rect = plt.Rectangle((-0.0075, -0.075), 0.015, 0.04, color="linen", fill=True, alpha=1.0)
     ax.add_artist(rect)
 
@@ -91,17 +88,34 @@ def visualize_optimal_traj_history(trainer_type: Type[AutomaticTrainerBase]):
     ax.arrow(0, 0, 0.02, 0, head_width=0.005, head_length=0.005, fc="r", ec="r")
     ax.arrow(0, 0, 0, 0.02, head_width=0.005, head_length=0.005, fc="b", ec="g")
 
-    for planer_traj in planer_traj_list:
-        x = planer_traj[:, 0]
-        y = planer_traj[:, 1]
-        yaw = planer_traj[:, 2]
-        dx = np.cos(yaw) * 0.006
-        dy = np.sin(yaw) * 0.006
 
+def plot_planer_traj(ax, planer_traj: np.ndarray, emphasis: bool = False):
+    x = planer_traj[:, 0]
+    y = planer_traj[:, 1]
+    yaw = planer_traj[:, 2]
+    dx = np.cos(yaw) * 0.006
+    dy = np.sin(yaw) * 0.006
+
+    if emphasis:
+        for i in range(len(x)):
+            ax.plot([x[i], x[i] + dx[i]], [y[i], y[i] + dy[i]], color="blue", lw=2.0)
+        ax.plot(planer_traj[:, 0], planer_traj[:, 1], label="planer", color="black", lw=2.0)
+    else:
         for i in range(len(x)):
             ax.plot([x[i], x[i] + dx[i]], [y[i], y[i] + dy[i]], color="blue", lw=0.5)
-
         ax.plot(planer_traj[:, 0], planer_traj[:, 1], label="planer", color="gray", lw=0.5)
+
+
+def visualize_optimal_traj_history(trainer_type: Type[AutomaticTrainerBase]):
+    traj_hist = get_optimal_traj_history(trainer_type)
+    n = len(traj_hist)
+    planer_traj_list = traj_hist[[0, 50, 150, 250, 350, n - 1]]
+    fig, ax = plt.subplots()
+
+    plot_mugcup(ax)
+
+    for planer_traj in planer_traj_list:
+        plot_planer_traj(ax, planer_traj)
     ax.set_xlim([-0.075, 0.05])
     ax.set_ylim([-0.08, 0.03])
     ax.set_aspect("equal")
@@ -125,49 +139,79 @@ def visualize_estimated_volume_history(trainer_type: Type[AutomaticTrainerBase])
 
 def visualize_feasible_region(trainer_type: Type[AutomaticTrainerBase], sliced_plot: bool = False):
     sampler, _, _ = trainer_type.load_refined_sampler()
+    n_param = sampler.metric.metirics[0].dim
+    param_opt = sampler.get_optimal_after_additional()
 
     if sliced_plot:
-        fig, ax = plt.subplots()
-        n_param = sampler.metric.metirics[0].dim
-        axes_slice = list(range(n_param)) + [n_param + 2]
-        param_opt = sampler.get_optimal_after_additional()
+        fig = plt.figure(figsize=(6, 6))
+        ax = fig.add_subplot(111)
 
         colors = [
             "red",
-            "orangered",
             "orange",
-            "gold",
             "yellow",
-            "yellowgreen",
             "greenyellow",
             "green",
         ]
-        slice_values = [-0.1, 0.1, 0.3, 0.5, 0.7]
+        slice_values = [-0.5, -0.25, 0.0, 0.25, 0.5]
 
+        axes_slice = list(range(n_param)) + [n_param + 2]
         for i, slice_value in enumerate(slice_values):
+            label = f"z = {slice_value}"
             sampler.fslset.show_sliced(
-                np.hstack([param_opt, slice_value]), axes_slice, 50, (fig, ax), colors=colors[i]
+                np.hstack([param_opt, slice_value]),
+                axes_slice,
+                50,
+                (fig, ax),
+                colors=colors[i],
             )
+        ax.set_xlabel("x [m]")
+        ax.set_ylabel("y [m]")
+        ax.set_aspect("equal")
+        ax.set_xlim(-0.05, 0.02)
+        ax.set_ylim(-0.03, 0.03)
         plt.show()
     else:
-        X = sampler.X[-sampler.count_additional :, -3:]
-        Y = np.array(sampler.Y[-sampler.count_additional :])
-        X_true = X[Y]
-        X_false = X[~Y]
+        n = 30
+        b_min, b_max = sampler.fslset.b_min[-3:], sampler.fslset.b_max[-3:]
+        lins = [np.linspace(l, u, n) for l, u in zip(b_min, b_max)]
+        X, Y, Z = np.meshgrid(*lins)
+        errors = np.array(list(zip(X.flatten(), Y.flatten(), Z.flatten())))
+        param_opt_repeated = np.repeat(param_opt.reshape(1, -1), errors.shape[0], axis=0)
+        pts = np.hstack([param_opt_repeated, errors])
 
-        fig = plt.figure()
+        axes_slice = list(range(n_param))
+        values = sampler.fslset.func(pts)
+        F = values.reshape((n, n, n))
+        spacing = (b_max - b_min) / n
+        verts, faces, _, _ = measure.marching_cubes(F, 0, spacing=spacing)
+        offset = b_min
+        verts += offset
+
+        fig = plt.figure(figsize=(6, 6))
         ax = fig.add_subplot(111, projection="3d")
-        ax.scatter(X_true[:, 0], X_true[:, 1], X_true[:, 2], c="b")
-        ax.scatter(X_false[:, 0], X_false[:, 1], X_false[:, 2], c="r")
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("yaw")
+        mesh = Poly3DCollection(verts[faces])
+        mesh.set_edgecolor("k")
+        mesh.set_alpha(0.1)
+        ax.add_collection3d(mesh)
+        ax.set_xlim(-0.05, 0.02)
+        ax.set_ylim(-0.03, 0.03)
+        ax.set_zlim(-0.6, 0.6)
+        ax.set_xlabel("x [m]")
+        ax.set_ylabel("y [m]")
+        ax.set_zlabel("yaw [rad]")
         plt.show()
 
 
 if __name__ == "__main__":
+    visualize_optimal_traj_history(MugcupGraspTrainer)
+    # visualize_feasible_region(MugcupGraspTrainer, sliced_plot=True)
+    # visualize_estimated_volume_history(MugcupGraspTrainer)
+    # traj_hist = get_optimal_traj_history(MugcupGraspTrainer)
+    # traj = traj_hist[0]
+    # visualize_optimal_traj_history(MugcupGraspTrainer)
+    # plt.show()
     # param_opt_seq, volume_opt_seq = get_optimization_history(MugcupGraspTrainer)
     # plt.plot(volume_opt_seq)
     # plt.plot(param_opt_seq[:, -8:])
     # plt.show()
-    visualize_feasible_region(MugcupGraspTrainer)
