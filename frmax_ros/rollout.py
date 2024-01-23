@@ -373,7 +373,9 @@ class AutomaticTrainerBase(ABC):
             return sampler, max_episode
 
     @classmethod
-    def load_refined_sampler(cls) -> Tuple[DistributionGuidedSampler, int, int]:
+    def load_refined_sampler(
+        cls, i_refine_next: Optional[int] = None
+    ) -> Tuple[DistributionGuidedSampler, int, int]:
         project_path = cls.get_project_path()
         d = {}
         for p in project_path.iterdir():
@@ -392,7 +394,10 @@ class AutomaticTrainerBase(ABC):
             raise ValueError("multiple cache files found")
 
         i_episode_next = list(d.keys())[0]
-        i_refine_episode_next = max(d[i_episode_next])
+        if i_refine_next is None:
+            i_refine_episode_next = max(d[i_episode_next])
+        else:
+            i_refine_episode_next = i_refine_next
         latest_episode_path = project_path / f"refined-{i_episode_next}-{i_refine_episode_next}.pkl"
         assert latest_episode_path.exists(), f"no cache file found at {latest_episode_path}"
         with open(latest_episode_path, "rb") as f:

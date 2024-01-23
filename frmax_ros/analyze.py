@@ -203,8 +203,17 @@ def visualize_feasible_region(trainer_type: Type[AutomaticTrainerBase], sliced_p
         plt.show()
 
 
+def visualize_confidence_score(trainer_type: Type[AutomaticTrainerBase]):
+    for i in range(50):
+        sampler, _, _ = trainer_type.load_refined_sampler(i + 1)
+        param_optimal = sampler.get_optimal_after_additional()
+        score = sampler.confidence_score(param_optimal, 10000)
+        print(score)
+
+
 if __name__ == "__main__":
-    visualize_optimal_traj_history(MugcupGraspTrainer)
+    visualize_confidence_score(MugcupGraspTrainer)
+    # visualize_optimal_traj_history(MugcupGraspTrainer)
     # visualize_feasible_region(MugcupGraspTrainer, sliced_plot=True)
     # visualize_estimated_volume_history(MugcupGraspTrainer)
     # traj_hist = get_optimal_traj_history(MugcupGraspTrainer)
