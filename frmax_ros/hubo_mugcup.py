@@ -431,6 +431,12 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         q_traj_reaching = q_traj_reaching.resample(20).numpy()
         self.send_command_to_real_robot(q_traj_reaching, times_reaching, "larm")
 
+        # rotate by 90 degrees to calibrate
+        current = self.pr2.l_wrist_roll_joint.joint_angle()
+        self.pr2.l_wrist_roll_joint.joint_angle(current + np.pi / 2.0)
+        self.ri.angle_vector(self.pr2.angle_vector(), time_scale=1.0, time=2.0)
+        self.ri.wait_interpolation()
+
         # calibrate and check pose again
         rospy.loginfo("calibrating")
         self.ri.move_gripper("larm", 0.0)
@@ -438,11 +444,18 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         self.offset_prover.reset()
         self.pose_provider.reset(acceptable_xy_std=0.005, acceptable_theta_std=np.deg2rad(5.0))
         try:
-            offset = self.offset_prover.get_offset()
+            offset = -self.offset_prover.get_offset()
         except TimeoutError:
             self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
             reason = "failed to get calibration"
             raise RolloutAbortedException(reason, False)
+        rospy.loginfo(f"offset: {offset}")
+
+        # rotate by 90 degrees to calibrate
+        self.pr2.l_wrist_roll_joint.joint_angle(current)
+        self.ri.angle_vector(self.pr2.angle_vector(), time_scale=1.0, time=2.0)
+        self.ri.wait_interpolation()
+
         try:
             tf_object_to_base_again = self.get_tf_object_to_base(reset=False)
             # if the object is not in the same position, this means the robot collided
