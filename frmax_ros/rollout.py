@@ -28,7 +28,7 @@ from skrobot.sdf import GridSDF
 from skrobot.viewers import TrimeshSceneViewer
 from sound_play.libsoundplay import SoundClient
 
-from frmax_ros.node import ObjectPoseProvider, YellowTapeOffsetProvider
+from frmax_ros.node import LarmEndEffectorOffsetProvider, ObjectPoseProvider
 
 
 def speak(message: str) -> None:
@@ -103,7 +103,7 @@ class RolloutAbortedException(Exception):
 
 class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
     pose_provider: ObjectPoseProvider
-    offset_prover: YellowTapeOffsetProvider
+    offset_prover: LarmEndEffectorOffsetProvider
     pr2: PR2
     ri: PR2ROSRobotInterface
     pub_grasp_path: Publisher
@@ -117,7 +117,7 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
         self.initialize_robot()
         self.pub_grasp_path = rospy.Publisher("/grasp_path", RosPath, queue_size=1, latch=True)
         self.pose_provider = ObjectPoseProvider()
-        self.offset_prover = YellowTapeOffsetProvider()
+        self.offset_prover = LarmEndEffectorOffsetProvider
         self.scene = PlanningScene(self.pr2, target_object)
         # run monitor in background
         if use_obinata_keyboard:
