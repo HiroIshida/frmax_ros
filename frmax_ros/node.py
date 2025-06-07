@@ -1,30 +1,19 @@
 import time
 from typing import List, Optional, Tuple
 
-import message_filters
 import numpy as np
 import rospy
 import sensor_msgs.point_cloud2 as pc2
 import tf
-import tf2_ros
-import tf2_sensor_msgs
 from geometry_msgs.msg import PoseStamped
 from rospy import Publisher, Subscriber
-from sensor_msgs.msg import JointState, PointCloud2
-from sklearn.cluster import DBSCAN
-from skrobot.coordinates import Coordinates
+from sensor_msgs.msg import PointCloud2
 from skrobot.coordinates.math import (
     quaternion2rpy,
     rpy2quaternion,
     wxyz2xyzw,
     xyzw2wxyz,
 )
-from skrobot.interfaces.ros import PR2ROSRobotInterface
-from skrobot.model.link import Link
-from skrobot.model.primitives import Axis
-from skrobot.models.pr2 import PR2
-from skrobot.viewers import TrimeshSceneViewer
-from trimesh import PointCloud
 from typing_extensions import Optional
 
 from frmax_ros.utils import CoordinateTransform
@@ -190,153 +179,35 @@ class ObjectPoseProvider:
         rospy.loginfo("Published april: {}".format(april_pose))
 
 
-class PointCloudProvider:
-    buffer: tf2_ros.Buffer
-    _pcloud: Optional[np.ndarray]
-
+class LarmEndEffectorOffsetProvider:
     def __init__(self):
-        self.buffer = tf2_ros.Buffer()
-        tf2_ros.TransformListener(self.buffer)
-        self.sub_pcloud = Subscriber(
-            "/kinect_head/depth_registered/throttled/points", PointCloud2, self.callback
+        self.object_poes_provider = ObjectPoseProvider(
+            calibrate_z=False, april_fram_name="apriltag_id1"
         )
-        self._pcloud = None
-
-    def get_point_cloud(self, timeout: float = 10.0) -> np.ndarray:
-        if self._pcloud is not None:
-            return self._pcloud
-        ts = time.time()
-        while self._pcloud is None:
-            if time.time() - ts > timeout:
-                raise TimeoutError
-            rospy.sleep(1.0)
-        assert self._pcloud is not None
-        return self._pcloud
-
-    def callback(self, msg: PointCloud2) -> None:
-        if self._pcloud is not None:
-            return
-        rospy.loginfo("PointCloud is received")
-        target_frame = "base_footprint"
-        source_frame = msg.header.frame_id
-        try:
-            transform = self.buffer.lookup_transform(
-                target_frame, source_frame, rospy.Time(0), rospy.Duration(3.0)
-            )
-        except (
-            tf2_ros.LookupException,
-            tf2_ros.ConnectivityException,
-            tf2_ros.ExtrapolationException,
-        ) as e:
-            rospy.loginfo("TF Exception: {}".format(e))
-            return
-        transformed_cloud = tf2_sensor_msgs.do_transform_cloud(msg, transform)
-        gen = pc2.read_points(transformed_cloud, skip_nans=True, field_names=("x", "y", "z"))
-        points = np.array(list(gen))
-        self._pcloud = points
-        rospy.loginfo("PointCloud is received and stored")
-
-
-class YellowTapeOffsetProvider:
-    pr2: PR2
-    ri: PR2ROSRobotInterface
-    gripper_link: Link
-    viewer: Optional[TrimeshSceneViewer]
-    visualize: bool
-    method: str
-    _offset: Optional[np.ndarray]
-
-    def __init__(self, visualize: bool = False, method: str = "naive"):
-        self.pr2 = PR2()
-        sub_pcloud = message_filters.Subscriber("/yellow_tape/hsi_filter/output", PointCloud2)
-        sub_joint_states = message_filters.Subscriber("/joint_states", JointState)
-        message_filter = message_filters.ApproximateTimeSynchronizer(
-            [sub_pcloud, sub_joint_states], 100, 0.3
-        )
-        message_filter.registerCallback(self.callback_pointcloud_colored)
-        self.gripper_link = self.pr2.l_gripper_l_finger_link
-        self.viewer = None
-        self.visualize = visualize
-        self.method = method
-        self._offset = None
-
-    def get_offset(self, timeout: float = 5.0) -> np.ndarray:
-        if self._offset is not None:
-            return self._offset
-
-        ts = time.time()
-        while self._offset is None:
-            if time.time() - ts > timeout:
-                raise TimeoutError("Timeout waiting for _offset")
-            rospy.sleep(0.05)
-            rospy.loginfo("Waiting for _offset")
-        return self._offset
+        self.listener = tf.TransformListener()
+        self.offset = None
 
     def reset(self) -> None:
-        self._offset = None
-        rospy.loginfo("offset is reset")
+        self.object_poes_provider.reset()
 
-    def callback_pointcloud_colored(
-        self, pcloud_msg: PointCloud2, joint_state_msg: JointState
-    ) -> None:
-        if self._offset is not None:
+    def get_offset(self, timeout: float = 5.0) -> np.ndarray:
+        # offset wrt base frame
+        tf_april_to_base = self.object_poes_provider.get_tf_object_to_base(timeout=timeout)
+        target_frame = "base_footprint"
+        source_frame = "apriltag_fk"
+        try:
+            (trans, rot) = self.listener.lookupTransform(target_frame, source_frame, rospy.Time(0))
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            rospy.loginfo("TF Exception LarmEndEffectorOffsetProvider")
             return
-        table = {name: angle for name, angle in zip(joint_state_msg.name, joint_state_msg.position)}
-        [self.pr2.__dict__[name].joint_angle(angle) for name, angle in table.items()]
-        co_actual = self.gripper_link.copy_worldcoords()
-        co_actual.translate([0.02, 0.045, 0.0])
-        co_actual.rotate(-np.pi * 0.06, "z")
-
-        time.time()
-        gen = pc2.read_points(pcloud_msg, skip_nans=True, field_names=("x", "y", "z"))
-        xyz = np.array(list(gen))
-        if len(xyz) == 0:
-            rospy.logwarn("No yellow point cloud found")
-            return
-
-        # clustering
-        dbscan = DBSCAN(eps=0.005, min_samples=3)
-        clusters = dbscan.fit_predict(xyz)
-        if len(clusters) == 0:
-            rospy.logwarn("No yellow point cloud found")
-            return
-        n_label = np.max(clusters) + 1
-        cluster_sizes = [np.sum(clusters == i) for i in range(n_label)]
-        largest_cluster_idx = np.argmax(cluster_sizes)
-        points_clustered = xyz[clusters == largest_cluster_idx]
-
-        # if multiple clusters are found, the largest one corresponds to the tape
-        # should have highest z value
-        clusters = [xyz[clusters == i] for i in range(n_label)]
-        z_means = [np.mean(cluster) for cluster in clusters]
-        highest_cluster_idx = np.argmax(z_means)
-        if highest_cluster_idx != largest_cluster_idx:
-            rospy.logwarn("The highest cluster is not the largest one")
-
-        mean = np.mean(points_clustered, axis=0)
-        co_from_cloud = Coordinates(pos=mean, rot=co_actual.worldrot())
-
-        self._offset = co_from_cloud.worldpos() - co_actual.worldpos()
-        rospy.loginfo(f"offset: {self._offset}")
-
-        if self.viewer is None and self.visualize:
-            self.viewer = TrimeshSceneViewer()
-            self.viewer.add(self.pr2)
-            link = Link()
-            axis_from_cloud = Axis.from_coords(co_from_cloud, axis_radius=0.002)
-            axis = Axis.from_coords(co_actual, axis_radius=0.002)
-            self.viewer.add(axis)
-            self.viewer.add(axis_from_cloud)
-            link._visual_mesh = PointCloud(points_clustered)
-            self.plink = link
-            self.viewer.add(link)
-            self.viewer.show()
+        assert trans is not None and rot is not None
+        offset = trans - tf_april_to_base.trans
+        return offset
 
 
 if __name__ == "__main__":
     rospy.init_node("tf_listener")
-    tf_object_april = CoordinateTransform(np.zeros(3), np.eye(3), "object", "april")
-    provider1 = ObjectPoseProvider()
-    provider2 = PointCloudProvider()
-    provider3 = YellowTapeOffsetProvider(visualize=True)
-    rospy.spin()
+    provider2 = LarmEndEffectorOffsetProvider()
+    provider2.reset()
+    offset = provider2.get_offset()
+    print(offset)
