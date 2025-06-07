@@ -79,18 +79,21 @@ class ObjectPoseProvider:
     _acceptable_xy_std: float
     _acceptable_theta_std: float
 
-    def __init__(self):
+    def __init__(self, calibrate_z: bool = True, april_fram_name: str = "apriltag_id0"):
         self.listener = tf.TransformListener()
         self.queue = AverageQueue(max_size=10)
         self._tf_april_to_base = None
         self._z_height = None
         rospy.Timer(rospy.Duration(0.1), self.update_queue)
         self.pub_april_pose = Publisher("april_pose", PoseStamped, queue_size=1, latch=True)
-        self.sub_points = Subscriber(
-            "/april_z_calibration/ExtractIndices/output", PointCloud2, self.callback_points
-        )
+        if calibrate_z:
+            self.sub_points = Subscriber(
+                "/april_z_calibration/ExtractIndices/output", PointCloud2, self.callback_points
+            )
         self._acceptable_xy_std = 0.005
         self._acceptable_theta_std = 0.03
+        self._april_fram_name = april_fram_name
+        self._calibrate_z = calibrate_z
 
     def callback_points(self, msg: PointCloud2) -> None:
         if self._z_height is not None:
@@ -132,14 +135,14 @@ class ObjectPoseProvider:
         return pose
 
     def update_queue(self, event) -> None:
-        if self._z_height is None:
+        if self._calibrate_z and self._z_height is None:
             return
         if self._tf_april_to_base is not None:
             return
         trans: Optional[np.ndarray] = None
         rot: Optional[np.ndarray] = None
         target_frame = "base_footprint"
-        source_frame = "apriltag_id0"
+        source_frame = self._april_fram_name
         try:
             (trans, rot) = self.listener.lookupTransform(target_frame, source_frame, rospy.Time(0))
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
@@ -151,7 +154,8 @@ class ObjectPoseProvider:
         # we care only yaw and know that othere angles are 0
         ypr = quaternion2rpy(xyzw2wxyz(rot))[0]
         xyztheta = np.hstack([trans, ypr[0]])
-        xyztheta[2] = self._z_height
+        if self._calibrate_z:
+            xyztheta[2] = self._z_height
 
         self.queue.enqueue((xyztheta, rospy.Time.now()))
 
