@@ -521,7 +521,6 @@ class MugcupGraspTrainer(AutomaticTrainerBase):
         ls_param = np.ones(21)
         ls_err = np.array([0.005, 0.005, np.deg2rad(5.0)])
         config = DGSamplerConfig(
-            param_ls_reduction_rate=0.999,
             n_mc_param_search=30,
             c_svm=10000,
             integration_method="mc",
