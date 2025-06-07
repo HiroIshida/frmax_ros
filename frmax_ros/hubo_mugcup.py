@@ -434,9 +434,9 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         # calibrate and check pose again
         rospy.loginfo("calibrating")
         self.ri.move_gripper("larm", 0.0)
+        time.sleep(5.0)
         self.offset_prover.reset()
         self.pose_provider.reset(acceptable_xy_std=0.005, acceptable_theta_std=np.deg2rad(5.0))
-        time.sleep(3.0)
         try:
             offset = self.offset_prover.get_offset()
         except TimeoutError:

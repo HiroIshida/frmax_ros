@@ -109,7 +109,7 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
     pub_grasp_path: Publisher
     scene: PlanningScene
 
-    def __init__(self, target_object: MeshLink, use_obinata_keyboard: bool = True):
+    def __init__(self, target_object: MeshLink, use_obinata_keyboard: bool = False):
         # rospy.init_node("robot_interface", disable_signals=True, anonymous=True)
         self.pr2 = PR2()
         self.ri = PR2ROSRobotInterface(self.pr2)
@@ -117,7 +117,7 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
         self.initialize_robot()
         self.pub_grasp_path = rospy.Publisher("/grasp_path", RosPath, queue_size=1, latch=True)
         self.pose_provider = ObjectPoseProvider()
-        self.offset_prover = LarmEndEffectorOffsetProvider
+        self.offset_prover = LarmEndEffectorOffsetProvider()
         self.scene = PlanningScene(self.pr2, target_object)
         # run monitor in background
         if use_obinata_keyboard:
