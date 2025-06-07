@@ -1,4 +1,10 @@
 <launch>
+  <arg name="standalone" default="true"/> <!-- debug nodes by setting then standalone -->
+  <arg name="MANAGER" value="detic_detection_manager" unless="$(arg standalone)"/>
+  <arg name="MANAGER" value="" if="$(arg standalone)"/>
+  <arg name="LOAD_STATEMENT" value="load" unless="$(arg standalone)"/>
+  <arg name="LOAD_STATEMENT" value="standalone" if="$(arg standalone)"/>
+
   <!-- You need to run this launch file in the PR2 robot for higher frequency of the image,
   otherwise the internal message filter will not work -->
   <node pkg="apriltag_ros" type="apriltag_ros_continuous_node" name="apriltag_pose_detector">
@@ -11,6 +17,41 @@
       publish_tf: true
     </rosparam>
   </node>
+
+  <group ns="april_z_calibration">
+    <node name="tf_transform"
+          pkg="nodelet" type="nodelet"
+          args="$(arg LOAD_STATEMENT) jsk_pcl_utils/TfTransformCloud $(arg MANAGER)">
+      <remap from="~input" to="/kinect_head/depth_registered/half/points"/>
+      <rosparam>
+        target_frame_id: base_footprint
+      </rosparam>
+    </node>
+
+    <node name="attension_clipper" pkg="nodelet" type="nodelet"
+      args="standalone jsk_pcl/AttentionClipper"
+      output="screen">
+      <remap from="~input/points" to="tf_transform/output"/>
+      <rosparam>
+        use_multiple_attention: false
+        dimension_x: 0.15
+        dimension_y: 0.15
+        dimension_z: 0.15
+        frame_id: apriltag_id0
+        initial_pos: [0.0, 0.0, 0.0]
+      </rosparam>
+    </node>
+
+    <node name="ExtractIndices" pkg="nodelet" type="nodelet"
+      args="standalone jsk_pcl/ExtractIndices"
+      output="screen">
+      <remap from="~input" to="tf_transform/output"/>
+      <remap from="~indices" to="attension_clipper/output/point_indices"/>
+      <rosparam>
+        keep_organized: true
+      </rosparam>
+    </node>
+  </group>
 
   <!-- NOTE: -0.04 is measured by hand. -.12 is determined by "eye calibration" -->
   <node pkg="tf2_ros" type="static_transform_publisher" name="sensor_frame_publisher"

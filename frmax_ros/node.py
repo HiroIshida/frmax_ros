@@ -87,7 +87,7 @@ class ObjectPoseProvider:
         rospy.Timer(rospy.Duration(0.1), self.update_queue)
         self.pub_april_pose = Publisher("april_pose", PoseStamped, queue_size=1, latch=True)
         self.sub_points = Subscriber(
-            "/remote/ExtractIndices/output", PointCloud2, self.callback_points
+            "/april_z_calibration/ExtractIndices/output", PointCloud2, self.callback_points
         )
         self._acceptable_xy_std = 0.005
         self._acceptable_theta_std = 0.03
@@ -139,7 +139,7 @@ class ObjectPoseProvider:
         trans: Optional[np.ndarray] = None
         rot: Optional[np.ndarray] = None
         target_frame = "base_footprint"
-        source_frame = "april"
+        source_frame = "apriltag_id0"
         try:
             (trans, rot) = self.listener.lookupTransform(target_frame, source_frame, rospy.Time(0))
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
