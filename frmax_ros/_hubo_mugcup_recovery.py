@@ -4,12 +4,20 @@ from typing import List, Tuple
 
 import numpy as np
 import rospy
-from skmp.constraint import BoxConst, CollFreeConst, ConfigPointConst
-from skmp.kinematics import ArticulatedEndEffectorKinematicsMap
-from skmp.robot.pr2 import PR2Config
-from skmp.robot.utils import get_robot_state, set_robot_state
-from skmp.solver.interface import Problem
-from skmp.solver.ompl_solver import OMPLSolver, OMPLSolverConfig
+
+try:
+    from skmp.constraint import BoxConst, CollFreeConst, ConfigPointConst
+    from skmp.kinematics import ArticulatedEndEffectorKinematicsMap
+    from skmp.robot.pr2 import PR2Config
+    from skmp.robot.utils import get_robot_state, set_robot_state
+    from skmp.solver.interface import Problem
+    from skmp.solver.ompl_solver import OMPLSolver, OMPLSolverConfig
+except ImportError:
+
+    class ArticulatedEndEffectorKinematicsMap:
+        ...
+
+
 from skrobot.coordinates import Coordinates, rpy_angle
 from skrobot.model.primitives import Box, Cylinder
 from skrobot.models.pr2 import PR2

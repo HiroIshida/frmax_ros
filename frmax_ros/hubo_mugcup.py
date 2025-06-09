@@ -11,26 +11,37 @@ from frmax2.core import DGSamplerConfig
 from geometry_msgs.msg import PoseStamped
 from movement_primitives.dmp import DMP
 from nav_msgs.msg import Path as RosPath
-from skmp.constraint import (
-    AbstractEqConst,
-    BoxConst,
-    CollFreeConst,
-    ConfigPointConst,
-    PoseConstraint,
-)
-from skmp.kinematics import (
-    ArticulatedCollisionKinematicsMap,
-    ArticulatedEndEffectorKinematicsMap,
-)
-from skmp.robot.pr2 import PR2Config
-from skmp.robot.utils import get_robot_state, set_robot_state
-from skmp.satisfy import (
-    SatisfactionConfig,
-    satisfy_by_optimization,
-    satisfy_by_optimization_with_budget,
-)
-from skmp.solver.interface import Problem
-from skmp.solver.ompl_solver import OMPLSolver, OMPLSolverConfig
+
+try:
+    from skmp.constraint import (
+        AbstractEqConst,
+        BoxConst,
+        CollFreeConst,
+        ConfigPointConst,
+        PoseConstraint,
+    )
+    from skmp.kinematics import (
+        ArticulatedCollisionKinematicsMap,
+        ArticulatedEndEffectorKinematicsMap,
+    )
+    from skmp.robot.pr2 import PR2Config
+    from skmp.robot.utils import get_robot_state, set_robot_state
+    from skmp.satisfy import (
+        SatisfactionConfig,
+        satisfy_by_optimization,
+        satisfy_by_optimization_with_budget,
+    )
+    from skmp.solver.interface import Problem
+    from skmp.solver.ompl_solver import OMPLSolver, OMPLSolverConfig
+except ImportError:
+
+    class ArticulatedCollisionKinematicsMap:
+        ...
+
+    class ArticulatedEndEffectorKinematicsMap:
+        ...
+
+
 from skmp.trajectory import Trajectory
 from skrobot.coordinates import Coordinates
 from skrobot.coordinates.math import rpy_angle
