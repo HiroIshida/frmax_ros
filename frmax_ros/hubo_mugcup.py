@@ -8,6 +8,7 @@ import rospkg
 import rospy
 import trimesh
 from frmax2.core import DGSamplerConfig
+from frmax2.dmp import determine_dmp_metric
 from geometry_msgs.msg import PoseStamped
 from movement_primitives.dmp import DMP
 from nav_msgs.msg import Path as RosPath
@@ -240,23 +241,23 @@ class GraspingPlanerTrajectory:
     seq_tf_ef_to_nominal: List[CoordinateTransform]
     pregrasp_gripper_pos: ClassVar[float] = 0.03
 
-    @classmethod
-    def get_goal_position_scaling(cls) -> np.ndarray:
-        xytheta_scaling = np.array([0.01, 0.01, np.deg2rad(20.0)])
-        goal_position_scaling = xytheta_scaling
-        return goal_position_scaling
+    # @classmethod
+    # def get_goal_position_scaling(cls) -> np.ndarray:
+    #     xytheta_scaling = np.array([0.01, 0.01, np.deg2rad(5.0)])
+    #     goal_position_scaling = xytheta_scaling
+    #     return goal_position_scaling
 
-    @classmethod
-    def get_force_scaling(cls) -> np.ndarray:
-        xytheta_scaling = np.array([0.03, 0.03, np.deg2rad(20.0)])
-        force_scalineg = xytheta_scaling * 200
-        return force_scalineg
+    # @classmethod
+    # def get_force_scaling(cls) -> np.ndarray:
+    #     xytheta_scaling = np.array([0.03, 0.03, np.deg2rad(5.0)])
+    #     force_scalineg = xytheta_scaling * 200
+    #     return force_scalineg
 
     def __init__(self, param: np.ndarray, dt: float = 0.1, *, im_using_this_in_demo: bool = True):
         if dt != 0.1:
             # double check
             assert not im_using_this_in_demo
-        assert param.shape == (3 * 6 + 3,)
+        assert param.shape == (3 * 6,)
         n_split = 100
         start = np.array([-0.06, -0.045, 0.0])
         goal = np.array([-0.0, -0.045, 0.0])
@@ -267,12 +268,7 @@ class GraspingPlanerTrajectory:
         dmp.imitate(np.linspace(0, 1, n_split), traj_default.copy())
         dmp.configure(start_y=traj_default[0])
 
-        n_dim = 3
-        n_goal_dim = 3
-        W = param[:-n_goal_dim].reshape(n_dim, -1)
-        dmp.forcing_term.weights_[:, :] += W[:, :] * self.get_force_scaling()[:, None]
-        goal_param = param[-n_goal_dim:] * self.get_goal_position_scaling()
-        dmp.goal_y += goal_param
+        dmp.forcing_term.weights_ += param.reshape(-1, n_weights_per_dim)
         _, planer_traj = dmp.open_loop()
 
         height = 0.065
@@ -369,7 +365,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
             return None
 
     def get_policy_dof(self) -> int:
-        return 21
+        return 18
 
     def rollout(self, param: np.ndarray, error: np.ndarray) -> bool:
         assert param.shape == (self.get_policy_dof(),)
@@ -567,29 +563,36 @@ class MugcupGraspTrainer(AutomaticTrainerBase):
 
 
 if __name__ == "__main__":
-    # e = MugcupGraspRolloutExecutor()
-    # e.recover()
-    # e.rollout(np.zeros(21), np.zeros(3))
-
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--resume", action="store_true", help="resume")
-    parser.add_argument("--refine", action="store_true", help="refine")
-    parser.add_argument("--episode", type=int, help="episode to load")
-    args = parser.parse_args()
-    np.random.seed(0)
-    if args.refine:
-        try:
-            trainer = MugcupGraspTrainer.load_refined()
-        except FileNotFoundError:
-            trainer = MugcupGraspTrainer.load()
-        for _ in range(50):
-            trainer.step_refinement()
+    test_with_nominal = True
+    if test_with_nominal:
+        param_metric = determine_dmp_metric(6, 0.25 * np.array([0.03, 0.03, 0.3]))
+        e = MugcupGraspRolloutExecutor()
+        e.recover()
+        for _ in range(1000):
+            z = np.random.randn(18)
+            param = param_metric.M @ z
+            e.rollout(param, np.zeros(3))
+        assert False
     else:
-        if args.resume:
-            trainer = MugcupGraspTrainer.load(args.episode)
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--resume", action="store_true", help="resume")
+        parser.add_argument("--refine", action="store_true", help="refine")
+        parser.add_argument("--episode", type=int, help="episode to load")
+        args = parser.parse_args()
+        np.random.seed(0)
+        if args.refine:
+            try:
+                trainer = MugcupGraspTrainer.load_refined()
+            except FileNotFoundError:
+                trainer = MugcupGraspTrainer.load()
+            for _ in range(50):
+                trainer.step_refinement()
         else:
-            trainer = MugcupGraspTrainer.init()
-        for _ in range(300):
-            trainer.step()
+            if args.resume:
+                trainer = MugcupGraspTrainer.load(args.episode)
+            else:
+                trainer = MugcupGraspTrainer.init()
+            for _ in range(300):
+                trainer.step()

@@ -14,6 +14,8 @@ import rospkg
 import rospy
 from evdev import InputDevice, categorize, ecodes
 from frmax2.core import CompositeMetric, DGSamplerConfig, DistributionGuidedSampler
+from frmax2.dmp import determine_dmp_metric
+from frmax2.metric import Metric
 from nav_msgs.msg import Path as RosPath
 from rospy import Publisher
 from skmp.robot.pr2 import PR2Config
@@ -283,8 +285,9 @@ class AutomaticTrainerBase(ABC):
         X = np.array(X)
         Y = np.array(Y)
         speak("finish initial sampling")
-
-        metric = CompositeMetric.from_ls_list([ls_param, ls_error])
+        param_metric = determine_dmp_metric(num_basis, 0.5 * np.array([0.03, 0.03, 0.3]))
+        error_metric = Metric.from_ls(ls_error)
+        metric = CompositeMetric([param_metric, error_metric])
         rollout_executor = rollout_executor
         sampler = DistributionGuidedSampler(
             X,
