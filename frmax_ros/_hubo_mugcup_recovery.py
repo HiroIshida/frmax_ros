@@ -114,7 +114,7 @@ class RecoveryMixIn:
     def recover(self) -> bool:
         self.initialize_robot()
 
-        xy_desired = np.array([0.45, +0.15])
+        xy_desired = np.array([0.48, +0.15])
         yaw_desired = -np.pi * 0.65
 
         assert yaw_desired is None or (-np.pi < yaw_desired < 0.0)
@@ -127,7 +127,7 @@ class RecoveryMixIn:
             co_pregrasp.rotate(-np.pi * 0.5, "x")
 
             co_grasp = co_pregrasp.copy_worldcoords()
-            co_grasp.translate([0.06, 0.0, 0.0])
+            co_grasp.translate([0.067, 0.0, 0.0])
             return co_pregrasp, co_grasp
 
         try:

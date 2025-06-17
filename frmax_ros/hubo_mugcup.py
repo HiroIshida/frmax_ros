@@ -275,7 +275,7 @@ class GraspingPlanerTrajectory:
         dmp.goal_y += goal_param
         _, planer_traj = dmp.open_loop()
 
-        height = 0.075
+        height = 0.07
         tf_seq = []
         for pose in planer_traj:
             trans = np.array([pose[0], pose[1], height])
@@ -339,9 +339,10 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
     def initialize_robot(self):
         self.pr2.reset_manip_pose()
         self.pr2.r_shoulder_pan_joint.joint_angle(-1.1)
-        self.pr2.l_shoulder_pan_joint.joint_angle(1.1)
         self.pr2.r_shoulder_lift_joint.joint_angle(-0.5)
-        self.pr2.l_shoulder_lift_joint.joint_angle(-0.5)
+        self.pr2.l_shoulder_pan_joint.joint_angle(1.1)
+        self.pr2.l_shoulder_lift_joint.joint_angle(+0.0)
+        self.pr2.l_elbow_flex_joint.joint_angle(-1.2)
         self.pr2.l_wrist_roll_joint.joint_angle(0.0)
         self.pr2.head_tilt_joint.joint_angle(+1.2)
         self.ri.angle_vector(self.pr2.angle_vector(), time_scale=5.0)

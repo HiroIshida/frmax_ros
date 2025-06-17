@@ -51,7 +51,7 @@ class PlanningScene:
 
     def __init__(self, pr2: PR2, target_object: MeshLink, visualize: bool = True):
         self.target_object = target_object
-        h = 0.72
+        h = 0.74
         table = Box(
             extents=[0.7, 1.1, h], with_sdf=True
         )  # x and y are bit larger than the actual table

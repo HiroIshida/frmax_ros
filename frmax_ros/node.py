@@ -111,6 +111,7 @@ class ObjectPoseProvider:
         ts = time.time()
         while self._tf_april_to_base is None:
             if time.time() - ts > timeout:
+                print(f"tf_april_to_base is not set after {timeout} seconds")
                 raise TimeoutError
             rospy.sleep(0.1)
         assert self._tf_april_to_base is not None
