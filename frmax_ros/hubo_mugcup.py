@@ -238,7 +238,7 @@ class PathPlanner:
 
 class GraspingPlanerTrajectory:
     seq_tf_ef_to_nominal: List[CoordinateTransform]
-    pregrasp_gripper_pos: ClassVar[float] = 0.04
+    pregrasp_gripper_pos: ClassVar[float] = 0.03
 
     @classmethod
     def get_goal_position_scaling(cls) -> np.ndarray:
@@ -275,7 +275,7 @@ class GraspingPlanerTrajectory:
         dmp.goal_y += goal_param
         _, planer_traj = dmp.open_loop()
 
-        height = 0.07
+        height = 0.065
         tf_seq = []
         for pose in planer_traj:
             trans = np.array([pose[0], pose[1], height])
@@ -522,8 +522,8 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
 
         # back to initial pose
         self.send_command_to_real_robot(q_traj_grasping[::-1], [0.5] * len(q_traj_grasping), "larm")
-        self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
         self.ri.move_gripper("larm", 0.0)
+        self.send_command_to_real_robot(q_traj_reaching[::-1], times_reaching[::-1], "larm")
         return annot
 
 
