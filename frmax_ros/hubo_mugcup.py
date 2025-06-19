@@ -330,7 +330,6 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         super().__init__(mugcup)
 
         self.path_planner = PathPlanner(self.pr2, self.scene)
-        self.tf_object_to_april = CoordinateTransform(np.array([0.022, -0.00, -0.095]), np.eye(3))
 
     def initialize_robot(self):
         self.pr2.reset_manip_pose()
@@ -351,7 +350,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
             self.pose_provider.reset()
         tf_april_to_base = self.pose_provider.get_tf_object_to_base()
         tf_object_to_april = CoordinateTransform(
-            np.array([0.013, -0.004, -0.095]), np.eye(3), "object", "april"
+            np.array([0.0, -0.0, -0.098]), np.eye(3), "object", "april"
         )
         return tf_object_to_april * tf_april_to_base
 
