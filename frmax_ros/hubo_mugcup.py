@@ -271,7 +271,7 @@ class GraspingPlanerTrajectory:
         dmp.forcing_term.weights_ += param.reshape(-1, n_weights_per_dim)
         _, planer_traj = dmp.open_loop()
 
-        height = 0.065
+        height = 0.07
         tf_seq = []
         for pose in planer_traj:
             trans = np.array([pose[0], pose[1], height])
@@ -434,7 +434,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
             raise RolloutAbortedException("planning failed", False)
 
         # now execute reaching and grasping
-        times_reaching = [0.1] * 17 + [0.6] * 2 + [1.0]
+        times_reaching = [0.25] * 17 + [0.6] * 2 + [1.0]
         q_traj_reaching = q_traj_reaching.resample(20).numpy()
         self.send_command_to_real_robot(q_traj_reaching, times_reaching, "larm")
 
