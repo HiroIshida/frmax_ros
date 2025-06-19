@@ -257,14 +257,14 @@ class GraspingPlanerTrajectory:
         if dt != 0.1:
             # double check
             assert not im_using_this_in_demo
-        assert param.shape == (3 * 6,)
+        assert param.shape == (2 * 6,)
         n_split = 100
-        start = np.array([-0.06, -0.045, 0.0])
-        goal = np.array([-0.0, -0.045, 0.0])
+        start = np.array([-0.06, -0.045])
+        goal = np.array([-0.0, -0.045])
         diff_step = (goal - start) / (n_split - 1)
         traj_default = np.array([start + diff_step * i for i in range(n_split)])
         n_weights_per_dim = 6
-        dmp = DMP(3, execution_time=1.0, n_weights_per_dim=n_weights_per_dim, dt=dt)
+        dmp = DMP(2, execution_time=1.0, n_weights_per_dim=n_weights_per_dim, dt=dt)
         dmp.imitate(np.linspace(0, 1, n_split), traj_default.copy())
         dmp.configure(start_y=traj_default[0])
 
@@ -275,7 +275,7 @@ class GraspingPlanerTrajectory:
         tf_seq = []
         for pose in planer_traj:
             trans = np.array([pose[0], pose[1], height])
-            co = Coordinates(trans, rot=[pose[2], 0, 0.5 * np.pi])
+            co = Coordinates(trans, rot=[0.0, 0, 0.5 * np.pi])
             tf_ef_to_nominal = CoordinateTransform.from_skrobot_coords(co, "ef", "nominal")
             tf_seq.append(tf_ef_to_nominal)
         self.seq_tf_ef_to_nominal = tf_seq
@@ -364,7 +364,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
             return None
 
     def get_policy_dof(self) -> int:
-        return 18
+        return 12
 
     def rollout(self, param: np.ndarray, error: np.ndarray) -> bool:
         assert param.shape == (self.get_policy_dof(),)
@@ -562,12 +562,12 @@ class MugcupGraspTrainer(AutomaticTrainerBase):
 
 
 if __name__ == "__main__":
-    test_with_nominal = False
+    test_with_nominal = True
     if test_with_nominal:
-        param_metric = determine_dmp_metric(6, 0.15 * np.array([0.03, 0.03, 0.3]))
+        param_metric = determine_dmp_metric(6, 0.15 * np.array([0.03, 0.03]))
         e = MugcupGraspRolloutExecutor()
         for _ in range(1000):
-            z = np.random.randn(18)
+            z = np.random.randn(12)
             param = param_metric.M @ z
             e.robust_rollout(param, np.zeros(3))
         assert False

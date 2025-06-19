@@ -277,7 +277,7 @@ class AutomaticTrainerBase(ABC):
         X = np.array(X)
         Y = np.array(Y)
         speak("finish initial sampling")
-        param_metric = determine_dmp_metric(6, 0.5 * np.array([0.03, 0.03, 0.3]))
+        param_metric = determine_dmp_metric(6, 0.3 * np.array([0.03, 0.03]))
         error_metric = Metric.from_ls(ls_error)
         metric = CompositeMetric([param_metric, error_metric])
         rollout_executor = rollout_executor
