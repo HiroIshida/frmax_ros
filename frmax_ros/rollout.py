@@ -188,15 +188,6 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
                 return self.rollout(param, error)
             except RolloutAbortedException as e:
                 rospy.logwarn(e.message)
-                speak(f"automatic recovery start")
-
-                if not e.april_recognition:
-                    if self.recover():
-                        speak(f"automatic recovery finished")
-                    try:
-                        return self.rollout(param, error)
-                    except RolloutAbortedException:
-                        speak(f"rollout failed even after automatic recovery")
                 speak(f"manual recovery required. reason is {e.message}")
                 while True:
                     user_input = input("push y after fixing the environment")

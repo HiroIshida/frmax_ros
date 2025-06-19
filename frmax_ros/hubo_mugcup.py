@@ -377,7 +377,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         self.scene.update(tf_object_to_base.to_skrobot_coords())
 
         x_pos, y_pos = tf_object_to_base.trans[:2]
-        if x_pos > 0.53 or y_pos > 0.2:
+        if x_pos > 0.6 or y_pos > 0.2:
             reason = f"invalid object position ({x_pos}, {y_pos})"
             raise RolloutAbortedException(reason, False)
 
@@ -564,13 +564,12 @@ class MugcupGraspTrainer(AutomaticTrainerBase):
 if __name__ == "__main__":
     test_with_nominal = True
     if test_with_nominal:
-        param_metric = determine_dmp_metric(6, 0.25 * np.array([0.03, 0.03, 0.3]))
+        param_metric = determine_dmp_metric(6, 0.15 * np.array([0.03, 0.03, 0.3]))
         e = MugcupGraspRolloutExecutor()
-        e.recover()
         for _ in range(1000):
             z = np.random.randn(18)
             param = param_metric.M @ z
-            e.rollout(param, np.zeros(3))
+            e.robust_rollout(param, np.zeros(3))
         assert False
     else:
         import argparse

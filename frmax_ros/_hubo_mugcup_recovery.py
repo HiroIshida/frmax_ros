@@ -112,6 +112,7 @@ class RecoveryMixIn:
         return lib
 
     def recover(self) -> bool:
+        assert False, "dont use this any more 2025/06/20"
         self.initialize_robot()
 
         xy_desired = np.array([0.48, +0.15])
