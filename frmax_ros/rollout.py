@@ -185,6 +185,7 @@ class RolloutExecutorBase(ABC):  # TODO: move later to task-agonistic module
     def robust_rollout(self, param: np.ndarray, error: np.ndarray) -> bool:
         while True:
             try:
+                rospy.loginfo(f"start rollout with param {param} and error {error}")
                 return self.rollout(param, error)
             except RolloutAbortedException as e:
                 rospy.logwarn(e.message)
@@ -276,7 +277,7 @@ class AutomaticTrainerBase(ABC):
         X = np.array(X)
         Y = np.array(Y)
         speak("finish initial sampling")
-        param_metric = determine_dmp_metric(num_basis, 0.3 * np.array([0.03, 0.03, 0.3]))
+        param_metric = determine_dmp_metric(6, 0.5 * np.array([0.03, 0.03, 0.3]))
         error_metric = Metric.from_ls(ls_error)
         metric = CompositeMetric([param_metric, error_metric])
         rollout_executor = rollout_executor
@@ -287,7 +288,7 @@ class AutomaticTrainerBase(ABC):
             param_init,
             sampler_config,
             situation_sampler=cls.sample_situation,
-            is_valid_param=cls.is_valid_param,
+            is_valid_param=None,
             use_prefacto_branched_ask=False,
         )
         return cls(0, 0, rollout_executor, sampler)
@@ -316,11 +317,6 @@ class AutomaticTrainerBase(ABC):
     @staticmethod
     @abstractmethod
     def sample_situation() -> np.ndarray:
-        pass
-
-    @staticmethod
-    @abstractmethod
-    def is_valid_param(param: np.ndarray) -> bool:
         pass
 
     def save(self):

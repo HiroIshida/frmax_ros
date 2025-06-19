@@ -547,14 +547,14 @@ class MugcupGraspTrainer(AutomaticTrainerBase):
         b_max = np.array([0.03, 0.03, np.pi * 0.2])
         return np.random.uniform(b_min, b_max)
 
-    @staticmethod
-    def is_valid_param(param: np.ndarray) -> bool:
-        scale = GraspingPlanerTrajectory.get_goal_position_scaling()
-        param_goal = param[-3:]
-        x, y, yaw = param_goal * scale
-        if abs(x) > 0.04 or abs(yaw) > np.deg2rad(45.0):
-            return False
-        return True
+    # @staticmethod
+    # def is_valid_param(param: np.ndarray) -> bool:
+    #     scale = GraspingPlanerTrajectory.get_goal_position_scaling()
+    #     param_goal = param[-3:]
+    #     x, y, yaw = param_goal * scale
+    #     if abs(x) > 0.04 or abs(yaw) > np.deg2rad(45.0):
+    #         return False
+    #     return True
 
     @staticmethod
     def get_project_name() -> str:
@@ -562,7 +562,7 @@ class MugcupGraspTrainer(AutomaticTrainerBase):
 
 
 if __name__ == "__main__":
-    test_with_nominal = True
+    test_with_nominal = False
     if test_with_nominal:
         param_metric = determine_dmp_metric(6, 0.15 * np.array([0.03, 0.03, 0.3]))
         e = MugcupGraspRolloutExecutor()
