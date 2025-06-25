@@ -433,7 +433,7 @@ class AutomaticTrainerBase(ABC):
         speak(f"start refinement {self.i_refine_episode_next}")
 
         if self.sampler.count_additional == 0:
-            param_opt = self.sampler.optimize(200, method="cmaes")
+            param_opt = self.sampler.optimize(2000)
         else:
             param_opt = self.sampler.get_optimal_after_additional()
         x = self.sampler.ask_additional(param_opt)

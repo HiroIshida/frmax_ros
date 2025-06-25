@@ -271,7 +271,7 @@ class GraspingPlanerTrajectory:
         dmp.forcing_term.weights_ += param.reshape(-1, n_weights_per_dim)
         _, planer_traj = dmp.open_loop()
 
-        height = 0.07
+        height = 0.065
         tf_seq = []
         for pose in planer_traj:
             trans = np.array([pose[0], pose[1], height])
@@ -340,7 +340,7 @@ class MugcupGraspRolloutExecutor(RecoveryMixIn, RolloutExecutorBase):
         self.pr2.l_elbow_flex_joint.joint_angle(-1.2)
         self.pr2.l_wrist_roll_joint.joint_angle(0.0)
         self.pr2.head_tilt_joint.joint_angle(+1.2)
-        self.ri.angle_vector(self.pr2.angle_vector(), time_scale=5.0)
+        self.ri.angle_vector(self.pr2.angle_vector(), time_scale=2.0)
         self.ri.move_gripper("larm", self.pregrasp_gripper_pos)
         self.ri.move_gripper("rarm", self.pregrasp_gripper_pos)
         self.ri.wait_interpolation()

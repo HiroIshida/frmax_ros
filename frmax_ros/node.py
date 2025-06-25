@@ -300,6 +300,9 @@ class YellowTapeOffsetProvider:
         n_label = np.max(clusters) + 1
         cluster_sizes = [np.sum(clusters == i) for i in range(n_label)]
         largest_cluster_idx = np.argmax(cluster_sizes)
+        if len(cluster_sizes) == 0:
+            rospy.logwarn("No clusters found in the point cloud")
+            return
         points_clustered = xyz[clusters == largest_cluster_idx]
 
         # if multiple clusters are found, the largest one corresponds to the tape
